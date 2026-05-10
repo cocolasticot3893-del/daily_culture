@@ -6,7 +6,6 @@ import hashlib
 import json
 import datetime
 import time
-from pathlib import Path
 
 # --- CONFIGURATION STREAMLIT ---
 st.set_page_config(page_title="L'Éveil Culturel", page_icon="🏛️", layout="wide")
@@ -31,96 +30,92 @@ GEMINI_KEY = st.secrets.get("GEMINI_API_KEY")
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # Utilisation de la dernière version Flash pour rapidité et fiabilité
     model = genai.GenerativeModel('gemini-flash-latest')
 else:
     st.error("❌ Clé API Gemini manquante. Veuillez vérifier les Secrets Streamlit.")
     st.stop()
 
-# --- FONCTIONS DE RÉSILIENCE (RETRY & BACKOFF) ---
-def ask_gemini_with_retry(prompt, max_retries=3):
-    """Envoie une requête à Gemini avec relance automatique en cas d'échec."""
-    full_prompt = f"Règle absolue : Tu dois répondre UNIQUEMENT en français.\n\n{prompt}"
-    
+# --- FONCTIONS DE RÉSILIENCE ---
+def ask_gemini_text(prompt, max_retries=3):
+    """Pour les réponses textuelles simples (comme l'analyse d'Art)."""
+    full_prompt = f"Règle absolue : Réponds uniquement en français.\n{prompt}"
     for attempt in range(max_retries):
         try:
             response = model.generate_content(full_prompt)
-            if response.text:
-                return response.text
+            if response.text: return response.text
         except Exception as e:
-            if attempt == max_retries - 1:
-                return f"<span class='error-text'>❌ Analyse échouée après {max_retries} tentatives (Erreur: {str(e)})</span>"
-            time.sleep(2 ** attempt) # Exponential backoff : attend 1s, puis 2s, puis 4s
-            
-    return "<span class='error-text'>❌ L'IA a retourné une réponse vide.</span>"
+            time.sleep(2 ** attempt)
+    return "❌ L'analyse est indisponible pour le moment."
 
-def fetch_json_with_retry(url, max_retries=3, timeout=10):
-    """Récupère un JSON avec gestion des timeouts et relances."""
+def ask_gemini_json(prompt, max_retries=3):
+    """Force Gemini à renvoyer un dictionnaire structuré (Idéal pour l'extraction de données)."""
+    full_prompt = f"Règle absolue : Tu dois répondre UNIQUEMENT avec un objet JSON valide en français, sans aucun formatage Markdown ni texte autour.\n\n{prompt}"
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(full_prompt)
+            # Nettoyage au cas où Gemini ajoute des balises ```json ... ```
+            clean_text = response.text.replace('```json', '').replace('```', '').strip()
+            return json.loads(clean_text)
+        except Exception as e:
+            time.sleep(2 ** attempt)
+    return None
+
+def fetch_json_api(url, max_retries=3, timeout=10):
+    """Pour les appels APIs classiques."""
     for attempt in range(max_retries):
         try:
             response = requests.get(url, timeout=timeout)
-            response.raise_for_status() # Lève une erreur si status n'est pas 200
+            response.raise_for_status()
             return response.json()
-        except requests.exceptions.RequestException as e:
-            if attempt == max_retries - 1:
-                return None # Retourne None si échec total
+        except:
             time.sleep(2 ** attempt)
     return None
 
 # --- LOGIQUE MÉTIER ---
 class CultureApp:
     def __init__(self):
-        # La seed du jour garantit la stabilité sur 24h
         today = datetime.date.today().strftime("%Y-%m-%d")
         self.seed = int(hashlib.md5(today.encode()).hexdigest(), 16) % (10**8)
         random.seed(self.seed)
 
-    def get_poem(self):
-        data = fetch_json_with_retry("https://poetrydb.org/poemcount/20")
-        
-        # Fallback si l'API PoetryDB est hors ligne
-        if not data:
-            return {
-                "type": "Poésie", "title": "Le Dormeur du val (Mode Secours)", 
-                "author": "Arthur Rimbaud", 
-                "content": "C'est un trou de verdure où chante une rivière...\nAccrochant follement aux herbes des haillons...",
-                "analysis": "Une magnifique réflexion sur la mort et la guerre, servie en mode hors-ligne."
-            }
-            
-        poem = random.choice(data)
-        lines_preview = "\n".join(poem.get('lines', [])[:8])
-        
-        prompt = f"Analyse brièvement (3 phrases) ce poème de {poem['author']} intitulé '{poem['title']}'. Traduis le titre s'il est en anglais."
-        analysis = ask_gemini_with_retry(prompt)
-        
-        return {"type": "Poésie", "title": poem.get('title', 'Inconnu'), "author": poem.get('author', 'Inconnu'), "content": lines_preview, "analysis": analysis}
-
     def get_art(self):
         ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529]
         obj_id = random.choice(ids)
-        art = fetch_json_with_retry(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}")
+        art = fetch_json_api(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}")
         
-        # Fallback si l'API MET échoue
         if not art:
-             return {"type": "Art", "title": "Œuvre indisponible", "author": "API Déconnectée", "image": None, "analysis": "Impossible de contacter le musée."}
+             return {"title": "Œuvre indisponible", "author": "API Déconnectée", "image": None, "analysis": "Impossible de contacter le musée."}
 
         title = art.get('title', 'Inconnue')
         artist = art.get('artistDisplayName', 'Inconnu')
         
-        prompt = f"Fais une analyse artistique très courte et captivante (3 phrases max) de l'œuvre '{title}' de {artist}. Traduis le titre en français dans ton texte."
-        analysis = ask_gemini_with_retry(prompt)
-        
-        return {"type": "Art", "title": title, "author": artist, "image": art.get('primaryImageSmall'), "analysis": analysis}
+        prompt = f"Fais une analyse artistique très approfondie et détaillée (environ 6 à 8 phrases) de l'œuvre '{title}' de {artist}. Traduis le titre en français dans ton texte."
+        analysis = ask_gemini_text(prompt)
+        return {"title": title, "author": artist, "image": art.get('primaryImageSmall'), "analysis": analysis}
+
+    def get_poem(self):
+        prompt = f"Graine : {self.seed}. Choisis un poème célèbre de la littérature classique FRANÇAISE (Hugo, Baudelaire, Musset...). Renvoie un JSON avec : 'titre', 'auteur', 'extrait' (les 8 à 10 premiers vers), et 'analyse' (une analyse profonde de 6 à 8 phrases sur le sens et le style)."
+        data = ask_gemini_json(prompt)
+        if data: return data
+        return {"titre": "Le Dormeur du val", "auteur": "Arthur Rimbaud", "extrait": "C'est un trou de verdure...", "analyse": "Erreur de chargement."}
 
     def get_cinema(self):
-        prompt = f"En te basant sur la graine aléatoire {self.seed}, choisis un film culte du cinéma mondial. Présente-le au format 'Titre (Année) - Réalisateur' puis donne une critique concise et fascinante de 3 lignes."
-        analysis = ask_gemini_with_retry(prompt)
-        return {"type": "Cinéma", "title": "La Sélection du Curateur", "analysis": analysis}
+        prompt = f"Graine : {self.seed}. Choisis un chef-d'œuvre incontournable du cinéma mondial. Renvoie un JSON avec : 'titre', 'realisateur', 'annee', et 'analyse' (une critique fascinante et détaillée de 6 à 8 phrases sur sa réalisation et son impact)."
+        data = ask_gemini_json(prompt)
+        if data: return data
+        return {"titre": "Film indisponible", "realisateur": "Inconnu", "annee": "", "analyse": "Erreur."}
 
     def get_philosophy(self):
-        prompt = f"En te basant sur la graine {self.seed}, choisis un concept philosophique célèbre. Donne le nom du concept, le philosophe associé, et explique-le simplement en 3 phrases en montrant comment l'appliquer aujourd'hui."
-        analysis = ask_gemini_with_retry(prompt)
-        return {"type": "Philosophie", "title": "La Pensée du Curateur", "analysis": analysis}
+        prompt = f"Graine : {self.seed}. Choisis un concept philosophique majeur. Renvoie un JSON avec : 'concept', 'philosophe', et 'analyse' (une explication poussée de 6 à 8 phrases montrant comment l'appliquer dans la vie quotidienne moderne)."
+        data = ask_gemini_json(prompt)
+        if data: return data
+        return {"concept": "Concept indisponible", "philosophe": "Inconnu", "analyse": "Erreur."}
+
+    def get_song(self):
+        prompt = f"Graine : {self.seed}. Choisis une chanson légendaire (française ou internationale). Renvoie un JSON avec : 'titre', 'artiste', 'annee', et 'analyse' (une analyse détaillée de 6 à 8 phrases explorant le sens profond des paroles et l'impact culturel du morceau)."
+        data = ask_gemini_json(prompt)
+        if data: return data
+        return {"titre": "Chanson indisponible", "artiste": "Inconnu", "annee": "", "analyse": "Erreur."}
 
 # --- INTERFACE ---
 app = CultureApp()
@@ -128,13 +123,14 @@ app = CultureApp()
 st.title("🏛️ L'Éveil Culturel")
 st.write(f"### Votre dose de savoir du {datetime.date.today().strftime('%d/%m/%Y')}")
 
-# On génère toutes les données en avance pour gérer les colonnes proprement
-with st.spinner("Le curateur prépare votre sélection du jour... (Cela peut prendre quelques secondes)"):
+with st.spinner("Le curateur rédige des analyses approfondies..."):
     art_data = app.get_art()
     philo_data = app.get_philosophy()
     poem_data = app.get_poem()
     cine_data = app.get_cinema()
+    song_data = app.get_song()
 
+# Disposition en 2 colonnes bien équilibrées
 col1, col2 = st.columns(2)
 
 with col1:
@@ -142,13 +138,16 @@ with col1:
     if art_data["image"]: st.image(art_data["image"], use_column_width=True)
     st.info(art_data['analysis'])
 
-    st.markdown(f'<div class="culture-card"><h3>🧠 Philosophie</h3></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="culture-card"><h3>🧠 Philosophie : {philo_data["concept"]}</h3><p><i>{philo_data["philosophe"]}</i></p></div>', unsafe_allow_html=True)
     st.info(philo_data['analysis'])
 
 with col2:
-    st.markdown(f'<div class="culture-card"><h3>📜 Poésie : {poem_data["title"]}</h3><p><i>{poem_data["author"]}</i></p></div>', unsafe_allow_html=True)
-    st.text(poem_data["content"])
-    st.info(poem_data['analysis'])
+    st.markdown(f'<div class="culture-card"><h3>📜 Poésie : {poem_data["titre"]}</h3><p><i>{poem_data["auteur"]}</i></p></div>', unsafe_allow_html=True)
+    st.text(poem_data["extrait"])
+    st.info(poem_data['analyse'])
 
-    st.markdown(f'<div class="culture-card"><h3>🎬 Cinéma</h3></div>', unsafe_allow_html=True)
-    st.info(cine_data['analysis'])
+    st.markdown(f'<div class="culture-card"><h3>🎵 Chanson : {song_data["titre"]}</h3><p><i>{song_data["artiste"]} ({song_data["annee"]})</i></p></div>', unsafe_allow_html=True)
+    st.info(song_data['analyse'])
+
+    st.markdown(f'<div class="culture-card"><h3>🎬 Cinéma : {cine_data["titre"]}</h3><p><i>{cine_data["realisateur"]} ({cine_data["annee"]})</i></p></div>', unsafe_allow_html=True)
+    st.info(cine_data['analyse'])
