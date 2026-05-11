@@ -8,7 +8,6 @@ import urllib.parse
 import time
 import re
 from pathlib import Path
-import base64
 
 # --- CONFIGURATION STREAMLIT ---
 st.set_page_config(page_title="L'Éveil Culturel", page_icon="🏛️", layout="centered")
@@ -82,7 +81,7 @@ def extract_json(text):
     except Exception as e:
         raise ValueError(f"Impossible de parser le JSON: {str(e)}")
 
-@st.cache_data(show_spinner=False, ttl=86400*30) # Cache de 30 jours pour les archives !
+@st.cache_data(show_spinner=False, ttl=86400*30) # Cache 30 jours
 def ask_deepseek(prompt, seed, retries=2):
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
@@ -97,7 +96,7 @@ def ask_deepseek(prompt, seed, retries=2):
     
     for i in range(retries):
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=25)
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
             return extract_json(content)
@@ -107,42 +106,56 @@ def ask_deepseek(prompt, seed, retries=2):
 
 # --- FONCTIONS DE CONTENU ---
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_quote(seed):
-    return ask_deepseek(f"Graine {seed}. Donne une citation inspirante et très courte. JSON: {{'citation': '...', 'auteur': '...'}}", seed)
+def get_quote(seed): return ask_deepseek(f"Graine {seed}. Citation inspirante courte. JSON: {{'citation': '...', 'auteur': '...'}}", seed)
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_art(seed):
     random.seed(seed)
     ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529, 437112, 436121, 459123, 436101, 436534]
-    obj_id = random.choice(ids)
     try:
-        r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}", timeout=10)
-        r.raise_for_status()
+        r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=10)
         art = r.json()
-        ds = ask_deepseek(f"Analyse passionnante (4 phrases) du tableau '{art.get('title')}' de {art.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...'}}", seed)
-        return {
-            "title": ds.get('titre_fr', art.get('title', 'Inconnu')),
-            "author": art.get('artistDisplayName', 'Inconnu'),
-            "image": art.get('primaryImageSmall'),
-            "analyse": ds.get('analyse', 'Analyse non disponible.'),
-            "link": art.get('objectURL', '')
-        }
-    except Exception as e: return {"erreur": True, "details": str(e)}
+        ds = ask_deepseek(f"Analyse passionnante (4 phrases) de '{art.get('title')}' par {art.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...'}}", seed)
+        return {"title": ds.get('titre_fr', art.get('title')), "author": art.get('artistDisplayName', 'Inconnu'), "image": art.get('primaryImageSmall'), "analyse": ds.get('analyse', 'Erreur.'), "link": art.get('objectURL')}
+    except: return {"erreur": True}
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_poem(seed): return ask_deepseek(f"Graine {seed}. Choisis un poème français. JSON: {{'titre': '...', 'auteur': '...', 'poeme_entier': 'Texte avec \\n', 'analyse': '4 phrases'}}", seed)
+def get_poem(seed): return ask_deepseek(f"Graine {seed}. Beau poème français. JSON: {{'titre': '...', 'auteur': '...', 'poeme_entier': 'Texte avec \\n', 'analyse': '4 phrases'}}", seed+1)
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_song(seed): return ask_deepseek(f"Graine {seed}. Choisis une chanson internationale culte. JSON: {{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '4 phrases'}}", seed)
+def get_song(seed): return ask_deepseek(f"Graine {seed}. Chanson culte. JSON: {{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '4 phrases'}}", seed+2)
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_movie(seed): return ask_deepseek(f"Graine {seed}. Choisis un grand film. JSON: {{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '4 phrases'}}", seed)
+def get_movie(seed): return ask_deepseek(f"Graine {seed}. Chef-d'œuvre du cinéma. JSON: {{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '4 phrases'}}", seed+3)
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_philo(seed): return ask_deepseek(f"Graine {seed}. Concept philosophique. JSON: {{'concept': '...', 'philosophe': '...', 'analyse': '4 phrases'}}", seed)
+def get_philo(seed): return ask_deepseek(f"Graine {seed}. Concept philosophique. JSON: {{'concept': '...', 'philosophe': '...', 'analyse': '4 phrases'}}", seed+4)
+
+@st.cache_data(show_spinner=False, ttl=86400*30)
+def get_arch(seed): return ask_deepseek(f"Graine {seed}. Un monument ou courant architectural fascinant. JSON: {{'titre': '...', 'lieu': '...', 'analyse': '4 phrases'}}", seed+5)
+
+@st.cache_data(show_spinner=False, ttl=86400*30)
+def get_myth(seed): return ask_deepseek(f"Graine {seed}. Un mythe, légende ou dieu antique (grec, nordique...). JSON: {{'titre': '...', 'origine': '...', 'analyse': '4 phrases'}}", seed+6)
+
+@st.cache_data(show_spinner=False, ttl=86400*30)
+def get_sci(seed): return ask_deepseek(f"Graine {seed}. Une découverte ou invention scientifique majeure. JSON: {{'titre': '...', 'inventeur': '...', 'analyse': '4 phrases'}}", seed+7)
+
+@st.cache_data(show_spinner=False, ttl=86400*30)
+def get_gastro(seed): return ask_deepseek(f"Graine {seed}. L'histoire d'un plat emblématique ou ingrédient célèbre. JSON: {{'titre': '...', 'origine': '...', 'analyse': '4 phrases'}}", seed+8)
+
 
 # --- GÉNÉRATEUR D'EXPORT OFFLINE ---
-def generate_offline_html(date_str, quote, art, poem, song, movie, philo):
+def generate_offline_html(date_str, quote, art, poem, song, movie, philo, arch, myth, sci, gastro):
+    def make_card(title, author, content, analysis):
+        if not title: return ""
+        return f"""
+        <div class="card">
+            <h2>{title}</h2>
+            <div class="author">{author}</div>
+            {f'<div class="poem">{content}</div>' if content else ''}
+            <div class="analysis">{analysis}</div>
+        </div>"""
+
     html_content = f"""
     <!DOCTYPE html>
     <html lang="fr">
@@ -164,40 +177,18 @@ def generate_offline_html(date_str, quote, art, poem, song, movie, philo):
     <body>
         <h1>🏛️ L'Éveil Culturel</h1>
         <p style="text-align: center;">Édition du {date_str}</p>
-        
         <div class="quote">« {quote.get('citation', '')} »<br><small>— {quote.get('auteur', '')}</small></div>
         
-        <div class="card">
-            <h2>🖼️ {art.get('title', '')}</h2>
-            <div class="author">{art.get('author', '')}</div>
-            {f'<img src="{art["image"]}" alt="Oeuvre">' if art.get("image") else ''}
-            <div class="analysis">{art.get('analyse', '')}</div>
-        </div>
-
-        <div class="card">
-            <h2>📜 {poem.get('titre', '')}</h2>
-            <div class="author">{poem.get('auteur', '')}</div>
-            <div class="poem">{poem.get('poeme_entier', '')}</div>
-            <div class="analysis">{poem.get('analyse', '')}</div>
-        </div>
-
-        <div class="card">
-            <h2>🧠 {philo.get('concept', '')}</h2>
-            <div class="author">{philo.get('philosophe', '')}</div>
-            <div class="analysis">{philo.get('analyse', '')}</div>
-        </div>
+        {f'<div class="card"><h2>🖼️ {art.get("title", "")}</h2><div class="author">{art.get("author", "")}</div><img src="{art.get("image", "")}" alt="Oeuvre"><div class="analysis">{art.get("analyse", "")}</div></div>' if not art.get("erreur") else ''}
+        {make_card('🏛️ Architecture: ' + arch.get('titre', ''), arch.get('lieu', ''), None, arch.get('analyse', '')) if not arch.get("erreur") else ''}
+        {make_card('📜 ' + poem.get('titre', ''), poem.get('auteur', ''), poem.get('poeme_entier', ''), poem.get('analyse', '')) if not poem.get("erreur") else ''}
+        {make_card('⚡ ' + myth.get('titre', ''), myth.get('origine', ''), None, myth.get('analyse', '')) if not myth.get("erreur") else ''}
+        {make_card('🧠 ' + philo.get('concept', ''), philo.get('philosophe', ''), None, philo.get('analyse', '')) if not philo.get("erreur") else ''}
+        {make_card('🌍 Science: ' + sci.get('titre', ''), sci.get('inventeur', ''), None, sci.get('analyse', '')) if not sci.get("erreur") else ''}
+        {make_card('🎵 ' + song.get('titre', ''), f"{song.get('artiste', '')} ({song.get('annee', '')})", None, song.get('analyse', '')) if not song.get("erreur") else ''}
+        {make_card('🍷 Gastronomie: ' + gastro.get('titre', ''), gastro.get('origine', ''), None, gastro.get('analyse', '')) if not gastro.get("erreur") else ''}
+        {make_card('🎬 ' + movie.get('titre', ''), f"{movie.get('realisateur', '')} ({movie.get('annee', '')})", None, movie.get('analyse', '')) if not movie.get("erreur") else ''}
         
-        <div class="card">
-            <h2>🎵 {song.get('titre', '')}</h2>
-            <div class="author">{song.get('artiste', '')} ({song.get('annee', '')})</div>
-            <div class="analysis">{song.get('analyse', '')}</div>
-        </div>
-
-        <div class="card">
-            <h2>🎬 {movie.get('titre', '')}</h2>
-            <div class="author">{movie.get('realisateur', '')} ({movie.get('annee', '')})</div>
-            <div class="analysis">{movie.get('analyse', '')}</div>
-        </div>
         <p style="text-align:center; color:#bdc3c7; margin-top:50px;">Généré par DeepSeek & Streamlit</p>
     </body>
     </html>
@@ -211,42 +202,24 @@ def display_exposition(target_date):
     
     st.markdown(f"<p style='text-align: center; color: #7f8c8d; margin-bottom: 20px;'>Édition du {target_date.strftime('%d/%m/%Y')}</p>", unsafe_allow_html=True)
 
-    with st.spinner("Le curateur assemble l'exposition (Instantané si déjà en cache)..."):
+    with st.spinner("Votre curateur parcourt l'Histoire pour composer l'exposition..."):
         quote_data = get_quote(seed)
         art_data = get_art(seed)
+        arch_data = get_arch(seed)
         poem_data = get_poem(seed)
-        song_data = get_song(seed)
-        movie_data = get_movie(seed)
+        myth_data = get_myth(seed)
         philo_data = get_philo(seed)
+        sci_data = get_sci(seed)
+        song_data = get_song(seed)
+        gastro_data = get_gastro(seed)
+        movie_data = get_movie(seed)
 
-    # Bouton d'export
-    html_export = generate_offline_html(target_date.strftime('%d/%m/%Y'), quote_data, art_data, poem_data, song_data, movie_data, philo_data)
-    st.download_button(
-        label="📥 Sauvegarder pour lecture hors-ligne (HTML/PDF)",
-        data=html_export,
-        file_name=f"Eveil_Culturel_{date_str}.html",
-        mime="text/html",
-        use_container_width=True
-    )
+    # Bouton d'export global
+    html_export = generate_offline_html(target_date.strftime('%d/%m/%Y'), quote_data, art_data, poem_data, song_data, movie_data, philo_data, arch_data, myth_data, sci_data, gastro_data)
+    st.download_button(label="📥 Sauvegarder pour lecture hors-ligne", data=html_export, file_name=f"Eveil_Culturel_{date_str}.html", mime="text/html", use_container_width=True)
     st.write("---")
 
-    # Affichage des contenus (comme avant)
-    if not quote_data.get("erreur"):
-        st.markdown(f"<div class='quote-box'>« {quote_data.get('citation', '')} »<br><span style='font-size:1rem; color:#7f8c8d;'>— {quote_data.get('auteur', '')}</span></div>", unsafe_allow_html=True)
-
-    if not art_data.get("erreur"):
-        st.markdown(f'<div class="culture-card"><div class="card-title">🖼️ {art_data["title"]}</div><div class="card-subtitle">{art_data["author"]}</div>', unsafe_allow_html=True)
-        if art_data.get("image"): st.image(art_data["image"])
-        st.markdown(f'<div class="analysis-box">{art_data["analyse"]}</div>', unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([1, 1, 4])
-        with c1:
-            if st.button("👍", key=f"l_art_{date_str}"): save_pref("Art", art_data["title"], art_data["author"], True, date_str)
-        with c2:
-            if st.button("👎", key=f"d_art_{date_str}"): save_pref("Art", art_data["title"], art_data["author"], False, date_str)
-        with c3:
-            if art_data.get("link"): st.markdown(f'<a href="{art_data["link"]}" target="_blank" class="deep-link">🔍 Voir en HD sur le site du MET</a>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
+    # HELPER D'AFFICHAGE
     def render_card(icon, cat, title, sub, content, analysis, url, link_txt):
         st.markdown(f'<div class="culture-card"><div class="card-title">{icon} {title}</div><div class="card-subtitle">{sub}</div>', unsafe_allow_html=True)
         if content: st.markdown(f'<div class="poem-box">{content}</div>', unsafe_allow_html=True)
@@ -260,39 +233,59 @@ def display_exposition(target_date):
             if url: st.markdown(f'<a href="{url}" target="_blank" class="deep-link">{link_txt}</a>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+    # 1. CITATION
+    if not quote_data.get("erreur"): st.markdown(f"<div class='quote-box'>« {quote_data.get('citation', '')} »<br><span style='font-size:1rem; color:#7f8c8d;'>— {quote_data.get('auteur', '')}</span></div>", unsafe_allow_html=True)
+
+    # 2. ARTS VISUELS (Peinture + Architecture)
+    if not art_data.get("erreur"):
+        st.markdown(f'<div class="culture-card"><div class="card-title">🖼️ {art_data["title"]}</div><div class="card-subtitle">{art_data["author"]}</div>', unsafe_allow_html=True)
+        if art_data.get("image"): st.image(art_data["image"])
+        st.markdown(f'<div class="analysis-box">{art_data["analyse"]}</div>', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([1, 1, 4])
+        with c1:
+            if st.button("👍", key=f"l_art_{date_str}"): save_pref("Art", art_data["title"], art_data["author"], True, date_str)
+        with c2:
+            if st.button("👎", key=f"d_art_{date_str}"): save_pref("Art", art_data["title"], art_data["author"], False, date_str)
+        with c3:
+            if art_data.get("link"): st.markdown(f'<a href="{art_data["link"]}" target="_blank" class="deep-link">🔍 Voir en HD sur le site du MET</a>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if not arch_data.get("erreur"): render_card("🏛️", "Architecture", arch_data.get("titre", ""), arch_data.get("lieu", ""), None, arch_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(arch_data.get('titre', ''))}", "🏛️ Explorer le monument")
+
+    # 3. LETTRES & PENSÉES (Poésie + Mythologie + Philo)
     if not poem_data.get("erreur"): render_card("📜", "Poésie", poem_data.get("titre", ""), poem_data.get("auteur", ""), poem_data.get("poeme_entier", ""), poem_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(poem_data.get('auteur', ''))}", "📖 Découvrir l'auteur")
-    if not song_data.get("erreur"): render_card("🎵", "Musique", song_data.get("titre", ""), f"{song_data.get('artiste', '')} ({song_data.get('annee', '')})", None, song_data.get("analyse", ""), f"https://music.youtube.com/search?q={urllib.parse.quote(song_data.get('artiste', '') + ' ' + song_data.get('titre', ''))}", "🎧 Écouter")
-    if not movie_data.get("erreur"): render_card("🎬", "Cinéma", movie_data.get("titre", ""), f"{movie_data.get('realisateur', '')} ({movie_data.get('annee', '')})", None, movie_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(movie_data.get('titre', '') + ' film')}", "🎞️ Fiche du film")
+    if not myth_data.get("erreur"): render_card("⚡", "Mythologie", myth_data.get("titre", ""), myth_data.get("origine", ""), None, myth_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(myth_data.get('titre', ''))}", "⚡ Découvrir le mythe")
     if not philo_data.get("erreur"): render_card("🧠", "Philosophie", philo_data.get("concept", ""), philo_data.get("philosophe", ""), None, philo_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(philo_data.get('concept', ''))}", "📚 Approfondir")
 
+    # 4. MONDE & DÉCOUVERTES (Science + Gastronomie)
+    if not sci_data.get("erreur"): render_card("🌍", "Science", sci_data.get("titre", ""), sci_data.get("inventeur", ""), None, sci_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(sci_data.get('titre', ''))}", "🌍 Comprendre l'invention")
+    if not gastro_data.get("erreur"): render_card("🍷", "Gastronomie", gastro_data.get("titre", ""), gastro_data.get("origine", ""), None, gastro_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(gastro_data.get('titre', ''))}", "🍷 L'histoire du plat")
 
-# --- APPLICATION PRINCIPALE ---
+    # 5. DIVERTISSEMENTS CULTES (Musique + Cinéma)
+    if not song_data.get("erreur"): render_card("🎵", "Musique", song_data.get("titre", ""), f"{song_data.get('artiste', '')} ({song_data.get('annee', '')})", None, song_data.get("analyse", ""), f"https://music.youtube.com/search?q={urllib.parse.quote(song_data.get('artiste', '') + ' ' + song_data.get('titre', ''))}", "🎧 Écouter")
+    if not movie_data.get("erreur"): render_card("🎬", "Cinéma", movie_data.get("titre", ""), f"{movie_data.get('realisateur', '')} ({movie_data.get('annee', '')})", None, movie_data.get("analyse", ""), f"https://fr.wikipedia.org/wiki/Spécial:Recherche?search={urllib.parse.quote(movie_data.get('titre', '') + ' film')}", "🎞️ Fiche du film")
+
+# --- ONGLETS PRINCIPAUX ---
 st.title("L'Éveil Culturel")
 
 tab_today, tab_archive, tab_fav = st.tabs(["✨ Aujourd'hui", "📅 Archives", "⭐ Favoris"])
 
-with tab_today:
-    display_exposition(datetime.date.today())
+with tab_today: display_exposition(datetime.date.today())
 
 with tab_archive:
     st.markdown("### Voyager dans le temps")
-    st.info("Sélectionnez une date passée. L'intelligence artificielle recréera exactement l'exposition qui a été (ou aurait été) générée ce jour-là.")
+    st.info("Sélectionnez une date passée pour recréer l'exposition de ce jour-là.")
     selected_date = st.date_input("Choisir une date :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
-    
     if selected_date != datetime.date.today():
         st.write("---")
         display_exposition(selected_date)
-    else:
-        st.warning("Pour voir l'exposition d'aujourd'hui, utilisez l'onglet '✨ Aujourd'hui'.")
+    else: st.warning("Pour voir l'exposition d'aujourd'hui, utilisez l'onglet '✨ Aujourd'hui'.")
 
 with tab_fav:
     st.header("⭐ Votre collection")
     prefs = load_prefs()
     liked_items = [p for p in prefs if p.get("liked") == True]
-    
-    if not liked_items:
-        st.info("Aucun favori pour l'instant.")
+    if not liked_items: st.info("Aucun favori pour l'instant.")
     else:
         liked_items.sort(key=lambda x: x["date"], reverse=True)
-        for item in liked_items:
-            st.markdown(f"**{item['category']}** : {item['title']} *(par {item['author']})* - `Sauvegardé le {item['date']}`")
+        for item in liked_items: st.markdown(f"**{item['category']}** : {item['title']} *(par {item['author']})* - `Sauvegardé le {item['date']}`")
