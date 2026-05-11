@@ -79,23 +79,28 @@ def extract_json(text):
     except Exception as e:
         raise ValueError(f"Impossible de parser le JSON: {str(e)}")
 
-def get_wiki_image(query):
-    """Cherche l'image principale d'un sujet sur Wikipédia via l'API publique."""
+def get_wiki_image(query, lang="fr"):
+    """Cherche l'image principale sur Wikipédia via l'API REST, robuste et rapide."""
     if not query: return None
+    # Indispensable : Un User-Agent pour que Wikipédia ne nous bloque pas en 403.
+    headers = {"User-Agent": "L_Eveil_Culturel_App/1.0 (contact@example.com)"}
     try:
-        # 1. Trouver le titre exact de la page
-        search_url = f"https://fr.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json&srlimit=1"
-        res = requests.get(search_url, timeout=5).json()
+        # 1. Recherche du titre exact de la page
+        search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json&srlimit=1"
+        res = requests.get(search_url, headers=headers, timeout=5).json()
         if not res.get('query', {}).get('search'): return None
         page_title = res['query']['search'][0]['title']
         
-        # 2. Récupérer l'URL de l'image (thumbnail grand format)
-        img_url = f"https://fr.wikipedia.org/w/api.php?action=query&titles={urllib.parse.quote(page_title)}&prop=pageimages&format=json&pithumbsize=800"
-        res2 = requests.get(img_url, timeout=5).json()
-        pages = res2.get('query', {}).get('pages', {})
-        for page_id in pages:
-            if 'thumbnail' in pages[page_id]:
-                return pages[page_id]['thumbnail']['source']
+        # 2. Appel à l'API REST de Wikipédia (beaucoup plus fiable pour l'image d'en-tête)
+        summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(page_title)}"
+        res2 = requests.get(summary_url, headers=headers, timeout=5).json()
+        
+        if 'originalimage' in res2:
+            return res2['originalimage']['source']
+        elif 'thumbnail' in res2:
+            # Récupère l'URL de base et tente de l'agrandir
+            thumb = res2['thumbnail']['source']
+            return re.sub(r'\d+px-', '800px-', thumb)
     except: pass
     return None
 
@@ -140,49 +145,57 @@ def get_art(seed):
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_poem(seed): 
     res = ask_deepseek(f"Graine {seed}. Poème français. JSON: {{'titre': '...', 'auteur': '...', 'poeme_entier': 'Texte avec \\n', 'analyse': 'Analyse approfondie (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia auteur'}}", seed+1)
-    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("auteur"))
+    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("auteur"), lang="fr")
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_song(seed): 
-    res = ask_deepseek(f"Graine {seed}. Chanson culte. JSON: {{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': 'Analyse approfondie (8 à 10 phrases)'}}", seed+2)
-    if not res.get("erreur"): res["image"] = get_wiki_image(f"{res.get('artiste')} groupe chanteur")
+    res = ask_deepseek(f"Graine {seed}. Chanson culte internationale ou française. JSON: {{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': 'Analyse approfondie (8 à 10 phrases)'}}", seed+2)
+    if not res.get("erreur"): 
+        # Utilise le wiki Anglais pour augmenter les chances d'avoir une cover d'album
+        img = get_wiki_image(f"{res.get('artiste')} {res.get('titre')} song", lang="en")
+        if not img: img = get_wiki_image(res.get('artiste'), lang="en")
+        res["image"] = img
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_movie(seed): 
-    res = ask_deepseek(f"Graine {seed}. Chef-d'œuvre cinéma. JSON: {{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': 'Analyse approfondie (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia'}}", seed+3)
-    if not res.get("erreur"): res["image"] = get_wiki_image(f"{res.get('titre')} film {res.get('realisateur')}")
+    res = ask_deepseek(f"Graine {seed}. Chef-d'œuvre cinéma mondial. JSON: {{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': 'Analyse approfondie (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia'}}", seed+3)
+    if not res.get("erreur"): 
+        # Astuce : On cherche sur le wiki Anglais car les posters de films y sont autorisés (Fair Use)
+        img = get_wiki_image(f"{res.get('titre')} movie", lang="en")
+        if not img: img = get_wiki_image(res.get('realisateur'), lang="fr") # Fallback sur le réalisateur
+        res["image"] = img
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_philo(seed): 
     res = ask_deepseek(f"Graine {seed}. Concept philosophique. JSON: {{'concept': '...', 'philosophe': '...', 'analyse': 'Explication détaillée (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia'}}", seed+4)
-    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("philosophe"))
+    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("philosophe"), lang="fr")
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_arch(seed): 
     res = ask_deepseek(f"Graine {seed}. Monument ou courant architectural. JSON: {{'titre': '...', 'lieu': '...', 'analyse': 'Analyse détaillée (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia'}}", seed+5)
-    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("titre"))
+    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("titre"), lang="fr")
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_myth(seed): 
     res = ask_deepseek(f"Graine {seed}. Mythe ou divinité. JSON: {{'titre': '...', 'origine': '...', 'analyse': 'Récit détaillé (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia'}}", seed+6)
-    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("titre"))
+    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("titre"), lang="fr")
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_sci(seed): 
     res = ask_deepseek(f"Graine {seed}. Invention scientifique. JSON: {{'titre': '...', 'inventeur': '...', 'analyse': 'Explication détaillée (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia'}}", seed+7)
-    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("inventeur") or res.get("titre"))
+    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("inventeur") or res.get("titre"), lang="fr")
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_gastro(seed): 
     res = ask_deepseek(f"Graine {seed}. Plat ou ingrédient. JSON: {{'titre': '...', 'origine': '...', 'analyse': 'Histoire détaillée (8 à 10 phrases)', 'lien_wiki': 'URL Wikipédia'}}", seed+8)
-    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("titre") + " plat gastronomie")
+    if not res.get("erreur"): res["image"] = get_wiki_image(res.get("titre") + " plat gastronomie", lang="fr")
     return res
 
 # --- GÉNÉRATEUR D'EXPORT OFFLINE ---
