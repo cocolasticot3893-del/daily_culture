@@ -74,7 +74,7 @@ def save_pref(category, title, author, is_liked, date_str):
     with open(PREFS_FILE, "w", encoding="utf-8") as f: json.dump(prefs, f, ensure_ascii=False, indent=4)
     if is_liked: st.toast("Ajouté aux favoris ! ⭐")
 
-# --- FONCTIONS HELPERS ---
+# --- FONCTIONS HELPERS (IMAGES & JSON) ---
 def extract_json(text):
     try:
         match = re.search(r'\{.*\}', text.strip(), re.DOTALL)
@@ -84,19 +84,17 @@ def extract_json(text):
         raise ValueError(f"Impossible de parser le JSON: {str(e)}")
 
 def get_wiki_image(query, lang="fr"):
-    """Cherche l'image principale sur Wikipédia avec une identité applicative."""
+    """Cherche l'image principale sur Wikipédia avec une identité applicative robuste."""
     if not query: return None
-    headers = {"User-Agent": "L_Eveil_Culturel_App/2.0 (contact@example.com)"}
+    headers = {"User-Agent": "L_Eveil_Culturel_App/2.2 (contact@example.com)"}
     try:
-        # Recherche du titre exact
         search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json&srlimit=1"
-        res = requests.get(search_url, headers=headers, timeout=10).json()
+        res = requests.get(search_url, headers=headers, timeout=8).json()
         if not res.get('query', {}).get('search'): return None
         page_title = res['query']['search'][0]['title']
         
-        # API REST pour l'image
         summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(page_title.replace(' ', '_'))}"
-        res2 = requests.get(summary_url, headers=headers, timeout=10).json()
+        res2 = requests.get(summary_url, headers=headers, timeout=8).json()
         
         if 'originalimage' in res2:
             return res2['originalimage']['source']
@@ -106,8 +104,7 @@ def get_wiki_image(query, lang="fr"):
     return None
 
 def fetch_image_cascade(res_dict, category):
-    """Système de recherche d'images en cascade (FR -> EN -> Auteur)."""
-    # Pour le cinéma et la musique, on tente l'anglais immédiatement car les droits d'images y sont plus souples
+    """Système de recherche d'images en cascade (FR -> EN). Retourne None si rien n'est trouvé."""
     primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture"] else "fr"
     
     queries = [
@@ -116,27 +113,29 @@ def fetch_image_cascade(res_dict, category):
         res_dict.get("artiste"),
         res_dict.get("auteur"),
         res_dict.get("realisateur"),
+        res_dict.get("philosophe"),
+        res_dict.get("inventeur"),
         res_dict.get("concept")
     ]
     queries = [q for q in queries if q and len(str(q)) > 2]
 
     for q in queries:
-        # Test Langue primaire
         img = get_wiki_image(q, primary_lang)
         if img: return img
-        # Test Langue secondaire
+        
         img = get_wiki_image(q, "fr" if primary_lang == "en" else "en")
         if img: return img
+        
     return None
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def ask_deepseek(prompt, seed, retries=2):
+def ask_deepseek(prompt, date_str, retries=2):
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "Tu es un expert culturel mondial. Tu fournis des analyses de 10 phrases riches. RÈGLE CRITIQUE : Ignore les numéros de tirage/ID fournis, ne les mentionne jamais. Réponds UNIQUEMENT en JSON pur."},
+            {"role": "system", "content": "Tu es un curateur culturel. Tes analyses sont profondes et détaillées (10 phrases). Réponds STRICTEMENT en JSON pur."},
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"}
@@ -153,130 +152,136 @@ def ask_deepseek(prompt, seed, retries=2):
 
 # --- FONCTIONS DE CONTENU ---
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_content_item(category_name, seed_offset):
+def get_content_item(category_name, date_str):
     prompts = {
+        "Architecture": "{'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom monument pour recherche image'}",
         "Poésie": "{'titre': '...', 'auteur': '...', 'poeme_entier': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
-        "Musique": "{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Artiste Chanson'}",
-        "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre Film Original'}",
-        "Philosophie": "{'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe'}",
-        "Architecture": "{'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Monument'}",
-        "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Sujet Mythe'}",
-        "Science": "{'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention'}",
-        "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Plat nom exact'}"
+        "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom divinité ou héros'}",
+        "Philosophie": "{'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe célèbre'}",
+        "Science": "{'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention ou Inventeur'}",
+        "Musique": "{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom de l\\'artiste musical'}",
+        "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du plat'}",
+        "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du film original'}"
     }
-    seed = st.session_state.daily_seed + seed_offset
-    prompt = f"Génération #{seed}. Catégorie: {category_name}. Règle : Ne cite pas ce numéro. Format JSON : {prompts[category_name]}"
     
-    res = ask_deepseek(prompt, seed)
+    # Utilisation de la date comme seul moteur de variabilité (plus de "Graine")
+    prompt = f"Édition du {date_str}. Propose une œuvre fascinante pour la catégorie : {category_name}. Format attendu : {prompts[category_name]}"
+    
+    res = ask_deepseek(prompt, date_str)
     if not res.get("erreur"):
         res["image"] = fetch_image_cascade(res, category_name)
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_art_safe(seed):
-    random.seed(seed)
-    ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529, 437112, 436121, 459123, 436101, 436534]
+def get_art_safe(date_str):
+    # La date fixe le "random" pour l'API du MET
+    seed_val = int(date_str.replace("-", ""))
+    random.seed(seed_val)
+    ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529, 437112, 436121, 459123]
     try:
-        r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=15)
-        art = r.json()
-        prompt = f"Analyse approfondie de '{art.get('title')}' par {art.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}"
-        ds = ask_deepseek(prompt, seed)
+        r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=15).json()
+        ds = ask_deepseek(f"Analyse riche de l'œuvre '{r.get('title')}' par {r.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}", date_str)
         return {
-            "titre": ds.get('titre_fr', art.get('title', 'Sans Titre')),
-            "auteur": art.get('artistDisplayName', 'Anonyme'),
-            "image": art.get('primaryImageSmall'),
+            "titre": ds.get('titre_fr', r.get('title', 'Sans Titre')),
+            "auteur": r.get('artistDisplayName', 'Anonyme'),
+            "image": r.get('primaryImageSmall'),
             "analyse": ds.get('analyse', 'Analyse en cours...'),
-            "lien_wiki": ds.get('lien_wiki') or art.get('objectURL')
+            "lien_wiki": ds.get('lien_wiki') or r.get('objectURL')
         }
     except: return {"erreur": True}
 
-# --- RENDU DE L'EXPOSITION ---
-def display_exposition(target_date):
+# --- AFFICHAGE ---
+def render_block_safe(icon, label, data, date_str, context_id, color="#d4af37"):
+    if not data or data.get("erreur"): return
+    
+    # Rendu sécurisé
+    titre = data.get("titre") or data.get("concept") or "Inconnu"
+    auteur = data.get("auteur") or data.get("artiste") or data.get("realisateur") or data.get("philosophe") or data.get("inventeur") or data.get("origine") or data.get("lieu") or ""
+    analyse = data.get("analyse") or "Analyse indisponible."
+    image = data.get("image")
+    wiki = data.get("lien_wiki")
+    poem_text = data.get("poeme_entier")
+    
+    # CRITIQUE : Clé unique incluant le contexte (today/archive) pour empêcher le plantage Streamlit
+    safe_key = f"{label}_{date_str}_{context_id}"
+
+    with st.container(border=True):
+        st.markdown(f"""
+            <div style="text-align: center; margin-bottom: 25px;">
+                <span style="color: {color}; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; font-size: 0.9rem;">{icon} {label}</span>
+                <h2 style="margin: 10px 0 5px 0; font-size: 2.2rem;">{titre}</h2>
+                <h4 style="font-style: italic; color: #7f8c8d; font-weight: normal; margin-top: 0;">{auteur}</h4>
+                <hr style="width: 50px; margin: 15px auto; border: 1px solid {color};">
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Affichage conditionnel de l'image (si Wikipédia n'a rien, on ne plante pas)
+        if image: 
+            st.image(image, use_container_width=True)
+            
+        if poem_text: 
+            st.markdown(f'<div class="poem-box">{poem_text}</div>', unsafe_allow_html=True)
+            
+        st.write(analyse)
+        
+        st.write("")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("👍 J'aime", key=f"btn_l_{safe_key}", use_container_width=True):
+                save_pref(label, titre, auteur, True, date_str)
+        with c2:
+            if st.button("👎 Bof", key=f"btn_d_{safe_key}", use_container_width=True):
+                save_pref(label, titre, auteur, False, date_str)
+        
+        if wiki:
+            btn_label = "🎧 Écouter" if label == "Musique" else "📖 Approfondir"
+            st.link_button(btn_label, wiki, use_container_width=True)
+
+def display_exposition(target_date, context_id):
     date_str = target_date.strftime("%Y-%m-%d")
-    st.session_state.daily_seed = int(hashlib.md5(date_str.encode()).hexdigest(), 16) % (10**8)
     
     st.markdown(f"<p style='text-align: center; color: #7f8c8d; font-size: 1.3rem; font-style: italic;'>Édition du {target_date.strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
 
-    with st.spinner("Votre curateur parcourt les bibliothèques du monde..."):
-        quote_data = ask_deepseek(f"Citation courte inspirante #{st.session_state.daily_seed}. JSON: {{'citation':'', 'auteur':''}}", st.session_state.daily_seed)
-        art_data = get_art_safe(st.session_state.daily_seed)
-        # Séquence de chargement
-        arch = get_content_item("Architecture", 1)
-        poem = get_content_item("Poésie", 2)
-        myth = get_content_item("Mythologie", 3)
-        philo = get_content_item("Philosophie", 4)
-        sci = get_content_item("Science", 5)
-        song = get_content_item("Musique", 6)
-        gastro = get_content_item("Gastronomie", 7)
-        movie = get_content_item("Cinéma", 8)
-
-    # 1. CITATION
-    if not quote_data.get("erreur"):
-        st.markdown(f"<div class='quote-box'>« {quote_data.get('citation', '')} »<br><span style='font-size:1.2rem; color:#7f8c8d;'>— {quote_data.get('auteur', '')}</span></div>", unsafe_allow_html=True)
-
-    def render_block_safe(icon, label, data, color="#d4af37"):
-        if data.get("erreur"): return
+    with st.spinner("Curation en cours..."):
+        quote = ask_deepseek(f"Citation courte inspirante pour l'édition du {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
+        art = get_art_safe(date_str)
         
-        # Gestion sécurisée des clés (pour éviter KeyError)
-        titre = data.get("titre") or data.get("concept") or "Inconnu"
-        auteur = data.get("auteur") or data.get("artiste") or data.get("realisateur") or data.get("philosophe") or data.get("inventeur") or data.get("origine") or data.get("lieu") or ""
-        analyse = data.get("analyse") or "Analyse indisponible."
-        image = data.get("image")
-        wiki = data.get("lien_wiki")
-        poem_text = data.get("poeme_entier")
-
-        with st.container(border=True):
-            st.markdown(f"""
-                <div style="text-align: center; margin-bottom: 25px;">
-                    <span style="color: {color}; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; font-size: 0.9rem;">{icon} {label}</span>
-                    <h2 style="margin: 10px 0 5px 0; font-size: 2.2rem;">{titre}</h2>
-                    <h4 style="font-style: italic; color: #7f8c8d; font-weight: normal; margin-top: 0;">{auteur}</h4>
-                    <hr style="width: 50px; margin: 15px auto; border: 1px solid {color};">
-                </div>
-            """, unsafe_allow_html=True)
+        blocks = [
+            ("Architecture", "#2c3e50", "🏛️"),
+            ("Poésie", "#8e44ad", "📜"),
+            ("Mythologie", "#e67e22", "⚡"),
+            ("Philosophie", "#16a085", "🧠"),
+            ("Science", "#2980b9", "🌍"),
+            ("Musique", "#c0392b", "🎵"),
+            ("Gastronomie", "#27ae60", "🍷"),
+            ("Cinéma", "#34495e", "🎬")
+        ]
+        
+        if not quote.get("erreur"):
+            st.markdown(f"<div class='quote-box'>« {quote.get('citation')} »<br><small>— {quote.get('auteur')}</small></div>", unsafe_allow_html=True)
             
-            if image: st.image(image, use_container_width=True)
-            if poem_text: st.markdown(f'<div class="poem-box">{poem_text}</div>', unsafe_allow_html=True)
-            st.write(analyse)
+        render_block_safe("🖼️", "Beaux-Arts", art, date_str, context_id, color="#b8860b")
             
-            st.write("")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("👍 J'aime", key=f"l_{label}_{titre}", use_container_width=True): save_pref(label, titre, auteur, True, date_str)
-            with c2:
-                if st.button("👎 Bof", key=f"d_{label}_{titre}", use_container_width=True): save_pref(label, titre, auteur, False, date_str)
-            
-            if wiki:
-                btn_label = "🎧 Écouter" if label == "Musique" else "📖 Approfondir"
-                st.link_button(btn_label, wiki, use_container_width=True)
+        for name, color, icon in blocks:
+            data = get_content_item(name, date_str)
+            render_block_safe(icon, name, data, date_str, context_id, color)
 
-    # AFFICHAGE DES BLOCS
-    if not art_data.get("erreur"): render_block_safe("🖼️", "Beaux-Arts", art_data, color="#b8860b")
-    render_block_safe("🏛️", "Architecture", arch, color="#2c3e50")
-    render_block_safe("📜", "Poésie", poem, color="#8e44ad")
-    render_block_safe("⚡", "Mythologie", myth, color="#e67e22")
-    render_block_safe("🧠", "Philosophie", philo, color="#16a085")
-    render_block_safe("🌍", "Science", sci, color="#2980b9")
-    render_block_safe("🎵", "Musique", song, color="#c0392b")
-    render_block_safe("🍷", "Gastronomie", gastro, color="#27ae60")
-    render_block_safe("🎬", "Cinéma", movie, color="#34495e")
-
-# --- INTERFACE ---
+# --- APP PRINCIPALE ---
 st.title("L'Éveil Culturel")
-tab_today, tab_archive, tab_fav = st.tabs(["✨ Aujourd'hui", "📅 Archives", "⭐ Favoris"])
+t1, t2, t3 = st.tabs(["✨ Aujourd'hui", "📅 Archives", "⭐ Favoris"])
 
-with tab_today: display_exposition(datetime.date.today())
-with tab_archive:
-    sel_date = st.date_input("Choisir une date :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
-    if sel_date != datetime.date.today():
-        st.write("---")
-        display_exposition(sel_date)
-with tab_fav:
-    st.header("⭐ Votre collection")
-    prefs = load_prefs()
-    liked = [p for p in prefs if p.get("liked")]
-    if not liked: st.info("Aucun favori pour l'instant.")
+with t1: 
+    display_exposition(datetime.date.today(), context_id="today")
+    
+with t2:
+    d = st.date_input("Date :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
+    if d != datetime.date.today(): 
+        display_exposition(d, context_id="archive")
+        
+with t3:
+    prefs = [p for p in load_prefs() if p.get("liked")]
+    if not prefs: 
+        st.info("Aucun favori pour le moment.")
     else:
-        liked.sort(key=lambda x: x.get("date", ""), reverse=True)
-        for item in liked:
-            st.markdown(f"**{item.get('category')}** : {item.get('title')} *({item.get('author')})* — {item.get('date')}")
+        for p in sorted(prefs, key=lambda x: x.get('date', ''), reverse=True):
+            st.markdown(f"**{p.get('category')}** : {p.get('title')} *({p.get('author')})* — {p.get('date')}")
