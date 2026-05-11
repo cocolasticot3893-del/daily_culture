@@ -95,17 +95,15 @@ def extract_json(text):
         raise ValueError(f"Impossible de parser le JSON: {str(e)}")
 
 def get_wiki_image(query, lang="fr"):
-    """Cherche l'image principale sur Wikipédia avec une logique de repli robuste."""
+    """Cherche l'image principale sur Wikipédia."""
     if not query: return None
-    headers = {"User-Agent": "L_Eveil_Culturel_App/1.1 (contact@example.com)"}
+    headers = {"User-Agent": "L_Eveil_Culturel_App/1.2 (contact@example.com)"}
     try:
-        # 1. Recherche du titre exact
         search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json&srlimit=1"
         res = requests.get(search_url, headers=headers, timeout=8).json()
         if not res.get('query', {}).get('search'): return None
         page_title = res['query']['search'][0]['title']
         
-        # 2. Appel à l'API REST moderne
         summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(page_title.replace(' ', '_'))}"
         res2 = requests.get(summary_url, headers=headers, timeout=8).json()
         
@@ -113,8 +111,32 @@ def get_wiki_image(query, lang="fr"):
             return res2['originalimage']['source']
         elif 'thumbnail' in res2:
             thumb = res2['thumbnail']['source']
-            return re.sub(r'\d+px-', '1000px-', thumb) # Meilleure résolution
+            return re.sub(r'\d+px-', '1000px-', thumb)
     except: pass
+    return None
+
+def fetch_image_with_fallback(res_dict, lang="fr"):
+    """Tente de trouver une image en essayant plusieurs mots-clés et langues."""
+    # Ordre de priorité : image_query > auteur/réalisateur/inventeur > titre
+    queries = [
+        res_dict.get("image_query"), 
+        res_dict.get("auteur"), 
+        res_dict.get("artiste"), 
+        res_dict.get("realisateur"),
+        res_dict.get("philosophe"), 
+        res_dict.get("inventeur"),
+        res_dict.get("titre"), 
+        res_dict.get("concept")
+    ]
+    queries = [q for q in queries if q and len(str(q)) > 2] # Nettoyage
+    
+    for q in queries:
+        img = get_wiki_image(q, lang)
+        if img: return img
+        # Fallback langue alternative
+        alt_lang = "en" if lang == "fr" else "fr"
+        img = get_wiki_image(q, alt_lang)
+        if img: return img
     return None
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
@@ -124,7 +146,7 @@ def ask_deepseek(prompt, seed, retries=2):
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "Tu es un expert culturel français. Tu fournis des analyses très approfondies (10 phrases) et des métadonnées précises. Réponds en JSON pur."},
+            {"role": "system", "content": "Tu es un expert culturel. Réponds UNIQUEMENT en JSON pur. Tu fournis des analyses très approfondies (10 phrases). RÈGLE ABSOLUE : Ne mentionne JAMAIS de numéro de tirage ou d'ID de génération dans ton texte."},
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"}
@@ -139,9 +161,10 @@ def ask_deepseek(prompt, seed, retries=2):
             time.sleep(2)
             if i == retries - 1: return {"erreur": True, "details": str(e)}
 
-# --- FONCTIONS DE CONTENU (Version 8.2 avec image_query) ---
+# --- FONCTIONS DE CONTENU ---
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_quote(seed): return ask_deepseek(f"Graine {seed}. Citation inspirante courte. JSON: {{'citation': '...', 'auteur': '...'}}", seed)
+def get_quote(seed): 
+    return ask_deepseek(f"[Tirage aléatoire #{seed}] Citation inspirante courte. JSON: {{'citation': '...', 'auteur': '...'}}", seed)
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_art(seed):
@@ -150,7 +173,7 @@ def get_art(seed):
     try:
         r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=12)
         art = r.json()
-        prompt = f"Analyse approfondie de '{art.get('title')}' par {art.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Meilleur terme recherche image Wikipédia'}}"
+        prompt = f"[Tirage aléatoire #{seed}] Analyse approfondie de '{art.get('title')}' par {art.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}"
         ds = ask_deepseek(prompt, seed)
         return {"titre": ds.get('titre_fr', art.get('title')), "auteur": art.get('artistDisplayName', 'Inconnu'), "image": art.get('primaryImageSmall'), "analyse": ds.get('analyse', 'Erreur.'), "lien_wiki": ds.get('lien_wiki') or art.get('objectURL')}
     except: return {"erreur": True}
@@ -158,20 +181,25 @@ def get_art(seed):
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_content_item(category_name, seed_offset):
     prompts = {
-        "Poésie": "Poème français célèbre. JSON: {'titre': '...', 'auteur': '...', 'poeme_entier': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom auteur ou oeuvre pour image'}",
-        "Musique": "Chanson culte. JSON: {'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Artiste ou album cover'}",
-        "Cinéma": "Chef-d'œuvre cinéma. JSON: {'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom film original movie'}",
-        "Philosophie": "Concept philosophique. JSON: {'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Portrait du philosophe'}",
-        "Architecture": "Monument mondial. JSON: {'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact monument'}",
-        "Mythologie": "Mythe ou divinité. JSON: {'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom divinité'}",
-        "Science": "Invention majeure. JSON: {'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom invention ou inventeur'}",
-        "Gastronomie": "Plat emblématique. JSON: {'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom plat gastronomique'}"
+        "Poésie": "Poème français célèbre. JSON: {'titre': '...', 'auteur': '...', 'poeme_entier': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact de l\\'auteur'}",
+        "Musique": "Chanson culte internationale ou française. JSON: {'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du groupe ou artiste'}",
+        "Cinéma": "Chef-d'œuvre du cinéma mondial. JSON: {'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du réalisateur'}",
+        "Philosophie": "Concept philosophique majeur. JSON: {'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du philosophe'}",
+        "Architecture": "Monument historique mondial. JSON: {'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du monument'}",
+        "Mythologie": "Mythe ou divinité. JSON: {'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact de la divinité'}",
+        "Science": "Invention majeure ou découverte. JSON: {'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact de l\\'inventeur'}",
+        "Gastronomie": "Plat emblématique mondial. JSON: {'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du plat'}"
     }
     seed = st.session_state.daily_seed + seed_offset
-    res = ask_deepseek(f"Graine {seed}. {prompts[category_name]}", seed)
+    # Protection anti-hallucination du LLM
+    full_prompt = f"ID de génération: {seed}. Propose une oeuvre pour la catégorie {category_name}. Règle stricte: Ne mentionne jamais cet ID dans ton texte. {prompts[category_name]}"
+    
+    res = ask_deepseek(full_prompt, seed)
+    
     if not res.get("erreur"):
         lang = "en" if category_name in ["Musique", "Cinéma"] else "fr"
-        res["image"] = get_wiki_image(res.get("image_query") or res.get("titre") or res.get("concept"), lang=lang)
+        # Recherche d'image avec système de fallback intégré
+        res["image"] = fetch_image_with_fallback(res, lang=lang)
     return res
 
 # --- RENDU DE L'EXPOSITION ---
