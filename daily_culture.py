@@ -84,11 +84,11 @@ def extract_json(text):
         raise ValueError(f"Impossible de parser le JSON: {str(e)}")
 
 def get_wiki_image(query, lang="fr"):
-    """Cherche l'image principale sur Wikipédia avec une identité applicative robuste."""
+    """Cherche l'image principale sur Wikipédia avec une correction d'URL."""
     if not query: return None
-    headers = {"User-Agent": "L_Eveil_Culturel_App/3.0 (contact@example.com)"}
+    headers = {"User-Agent": "L_Eveil_Culturel_App/3.1 (contact@example.com)"}
     try:
-        search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json&srlimit=1"
+        search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(str(query))}&utf8=&format=json&srlimit=1"
         res = requests.get(search_url, headers=headers, timeout=8).json()
         if not res.get('query', {}).get('search'): return None
         page_title = res['query']['search'][0]['title']
@@ -96,16 +96,22 @@ def get_wiki_image(query, lang="fr"):
         summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(page_title.replace(' ', '_'))}"
         res2 = requests.get(summary_url, headers=headers, timeout=8).json()
         
+        url = None
         if 'originalimage' in res2:
-            return res2['originalimage']['source']
+            url = res2['originalimage']['source']
         elif 'thumbnail' in res2:
-            return res2['thumbnail']['source']
+            url = res2['thumbnail']['source']
+            
+        if url:
+            # Correction cruciale : forcer le https si Wikipédia renvoie un lien relatif (//...)
+            if url.startswith("//"): url = "https:" + url
+            return url
     except: pass
     return None
 
 def fetch_image_cascade(res_dict, category):
     """Système de recherche d'images en cascade. Garantit 100% de succès."""
-    primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture"] else "fr"
+    primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture", "Littérature"] else "fr"
     
     queries = [
         res_dict.get("image_query"),
@@ -117,7 +123,8 @@ def fetch_image_cascade(res_dict, category):
         res_dict.get("inventeur"),
         res_dict.get("concept")
     ]
-    queries = [q for q in queries if q and len(str(q)) > 2]
+    # Nettoyage des requêtes vides
+    queries = [str(q) for q in queries if q and len(str(q)) > 2]
 
     # 1. Tenter Wikipédia (Images réelles et historiques)
     for q in queries:
@@ -128,14 +135,12 @@ def fetch_image_cascade(res_dict, category):
         if img: return img
         
     # 2. SOLUTION DE REPLI ABSOLUE : Générateur d'Image IA Gratuit
-    # Si aucune image n'est trouvée (très courant en philo ou poésie pointue),
-    # on force une illustration magnifique à la volée.
     if queries:
         best_query = queries[0]
-        # On construit un prompt pour une belle illustration esthétique
-        ai_prompt = f"High quality elegant artistic illustration or photography representing {best_query} for a {category} magazine cover"
+        # Suppression des caractères spéciaux pour ne pas casser l'URL de l'IA
+        clean_query = re.sub(r'[^a-zA-Z0-9\s]', ' ', str(best_query)).strip()
+        ai_prompt = f"Cinematic elegant high quality photography of {clean_query} for a {category} magazine"
         safe_prompt = urllib.parse.quote(ai_prompt)
-        # Pollinations.ai retourne directement une image générée depuis l'URL !
         return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=500&nologo=true"
         
     return None
@@ -166,14 +171,15 @@ def ask_deepseek(prompt, date_str, retries=2):
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_content_item(category_name, date_str):
     prompts = {
-        "Architecture": "{'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom monument pour recherche image'}",
         "Poésie": "{'titre': '...', 'auteur': '...', 'poeme_entier': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
-        "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom divinité ou héros'}",
-        "Philosophie": "{'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe célèbre'}",
-        "Science": "{'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention ou Inventeur'}",
+        "Littérature": "{'titre': '...', 'auteur': '...', 'extrait': 'Extrait marquant du livre...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du livre ou de l\\'auteur'}",
         "Musique": "{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom de l\\'artiste musical'}",
-        "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du plat'}",
-        "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du film original'}"
+        "Science": "{'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention ou Inventeur'}",
+        "Philosophie": "{'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe célèbre'}",
+        "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du film original'}",
+        "Architecture": "{'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom monument pour recherche image'}",
+        "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom divinité ou héros'}",
+        "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom exact du plat'}"
     }
     
     prompt = f"Édition du {date_str}. Propose une œuvre fascinante pour la catégorie : {category_name}. Format attendu : {prompts[category_name]}"
@@ -209,7 +215,9 @@ def render_block_safe(icon, label, data, date_str, context_id, color="#d4af37"):
     analyse = data.get("analyse") or "Analyse indisponible."
     image = data.get("image")
     wiki = data.get("lien_wiki")
-    poem_text = data.get("poeme_entier")
+    
+    # Prise en charge des poèmes ou des extraits de littérature
+    content_text = data.get("poeme_entier") or data.get("extrait")
     
     safe_key = f"{label}_{date_str}_{context_id}"
 
@@ -223,12 +231,12 @@ def render_block_safe(icon, label, data, date_str, context_id, color="#d4af37"):
             </div>
         """, unsafe_allow_html=True)
         
-        # L'image a désormais 100% de chances de s'afficher grâce au fallback IA
+        # Image corrigée à 100% de réussite
         if image: 
             st.image(image, use_container_width=True)
             
-        if poem_text: 
-            st.markdown(f'<div class="poem-box">{poem_text}</div>', unsafe_allow_html=True)
+        if content_text: 
+            st.markdown(f'<div class="poem-box">{content_text}</div>', unsafe_allow_html=True)
             
         st.write(analyse)
         
@@ -254,15 +262,17 @@ def display_exposition(target_date, context_id):
         quote = ask_deepseek(f"Citation courte inspirante pour l'édition du {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
         art = get_art_safe(date_str)
         
+        # Le NOUVEL ORDRE des rubriques :
         blocks = [
-            ("Architecture", "#2c3e50", "🏛️"),
             ("Poésie", "#8e44ad", "📜"),
-            ("Mythologie", "#e67e22", "⚡"),
-            ("Philosophie", "#16a085", "🧠"),
-            ("Science", "#2980b9", "🌍"),
+            ("Littérature", "#d35400", "📚"),
             ("Musique", "#c0392b", "🎵"),
-            ("Gastronomie", "#27ae60", "🍷"),
-            ("Cinéma", "#34495e", "🎬")
+            ("Science", "#2980b9", "🌍"),
+            ("Philosophie", "#16a085", "🧠"),
+            ("Cinéma", "#34495e", "🎬"),
+            ("Architecture", "#2c3e50", "🏛️"),
+            ("Mythologie", "#e67e22", "⚡"),
+            ("Gastronomie", "#27ae60", "🍷")
         ]
         
         if not quote.get("erreur"):
@@ -272,7 +282,8 @@ def display_exposition(target_date, context_id):
             
         for name, color, icon in blocks:
             data = get_content_item(name, date_str)
-            render_block_safe(icon, name, data, date_str, context_id, color)
+            label_display = "Sciences" if name == "Science" else name
+            render_block_safe(icon, label_display, data, date_str, context_id, color)
 
 # --- APP PRINCIPALE ---
 st.title("L'Éveil Culturel")
