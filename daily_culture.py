@@ -1,253 +1,269 @@
 import streamlit as st
-import google.generativeai as genai
 import requests
 import random
 import hashlib
 import json
 import datetime
-import time
+import urllib.parse
+from pathlib import Path
 
 # --- CONFIGURATION STREAMLIT ---
-# On passe en mode 'centered' pour un effet "page de livre" plutôt que tableau de bord
 st.set_page_config(page_title="L'Éveil Culturel", page_icon="🏛️", layout="centered")
 
-# --- CSS INSPIRÉ DES GALERIES D'ART ---
 st.markdown("""
     <style>
-    /* Importation de polices élégantes */
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Source+Sans+Pro:wght@300;400;600&display=swap');
     
-    /* Fond couleur parchemin clair / mur de musée */
-    .stApp {
-        background-color: #f9f7f1;
-        color: #2c3e50;
-    }
+    .stApp { background-color: #f9f7f1; color: #2c3e50; }
+    h1, h2, h3 { font-family: 'Playfair Display', serif; color: #1a252f; text-align: center; }
+    h1 { font-size: 2.5rem; border-bottom: 2px solid #d4af37; padding-bottom: 20px; margin-bottom: 30px; }
+    .stText, p, div { font-family: 'Source Sans Pro', sans-serif; font-size: 1.1rem; line-height: 1.6; }
     
-    /* Typographie des titres */
-    h1, h2, h3 {
-        font-family: 'Playfair Display', serif;
-        color: #1a252f;
-        text-align: center;
-    }
-    
-    h1 {
-        font-size: 3rem;
-        border-bottom: 2px solid #d4af37; /* Ligne dorée */
-        padding-bottom: 20px;
-        margin-bottom: 40px;
-    }
-
-    /* Style des textes */
-    .stText, p, li, div {
-        font-family: 'Source Sans Pro', sans-serif;
-        font-size: 1.15rem;
-        line-height: 1.6;
-    }
-
-    /* Le design des Cartes Culturelles */
     .culture-card {
-        background: #ffffff;
-        padding: 40px;
-        border-radius: 8px;
-        border-top: 4px solid #d4af37; /* Touche or/moutarde */
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05); /* Ombre douce et moderne */
+        background: #ffffff; padding: 30px; border-radius: 8px;
+        border-top: 4px solid #d4af37; box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
         margin-bottom: 30px;
-        transition: transform 0.3s ease;
     }
+    .card-title { font-family: 'Playfair Display', serif; font-size: 1.6rem; color: #1a252f; margin-bottom: 5px; }
+    .card-subtitle { font-style: italic; color: #7f8c8d; margin-bottom: 15px; font-size: 1.05rem; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+    .poem-box { font-family: 'Playfair Display', serif; font-size: 1.15rem; line-height: 1.8; margin: 20px 0; padding-left: 20px; border-left: 2px solid #d4af37; white-space: pre-wrap; }
+    .analysis-box { background-color: #fcfcfb; border-left: 3px solid #bdc3c7; padding: 15px; margin-top: 20px; font-size: 1.05rem; color: #34495e; border-radius: 0 4px 4px 0; }
     
-    .culture-card:hover {
-        transform: translateY(-5px); /* Petit effet de soulèvement au survol */
-    }
-
-    /* Titres à l'intérieur des cartes */
-    .card-title {
-        font-family: 'Playfair Display', serif;
-        font-size: 1.8rem;
-        color: #1a252f;
-        margin-bottom: 5px;
-        text-align: left;
-    }
+    /* Liens et boutons */
+    .deep-link { display: inline-block; margin-top: 15px; color: #d4af37; text-decoration: none; font-weight: 600; font-size: 1rem; }
+    .deep-link:hover { text-decoration: underline; }
     
-    .card-subtitle {
-        font-style: italic;
-        color: #7f8c8d;
-        margin-bottom: 25px;
-        font-size: 1.1rem;
-        border-bottom: 1px solid #eee;
-        padding-bottom: 15px;
-    }
-
-    /* Zone d'analyse (fond grisé très léger) */
-    .analysis-box {
-        background-color: #fcfcfb;
-        border-left: 3px solid #bdc3c7;
-        padding: 20px;
-        margin-top: 25px;
-        font-size: 1.05rem;
-        color: #34495e;
-        border-radius: 0 4px 4px 0;
-    }
-    
-    /* Mettre l'image du tableau en valeur */
-    [data-testid="stImage"] img {
-        border-radius: 4px;
-        box-shadow: 0 8px 20px rgba(0,0,0,0.15);
-        margin-bottom: 20px;
-    }
+    [data-testid="stImage"] img { border-radius: 4px; box-shadow: 0 8px 20px rgba(0,0,0,0.15); margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- INITIALISATION GEMINI ---
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY")
+# --- INITIALISATION DEEPSEEK API ---
+DEEPSEEK_KEY = st.secrets.get("DEEPSEEK_API_KEY")
 
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel('gemini-flash-latest')
-else:
-    st.error("❌ Clé API Gemini manquante. Veuillez vérifier les Secrets Streamlit.")
+if not DEEPSEEK_KEY:
+    st.error("❌ Clé API DeepSeek manquante dans les Secrets Streamlit.")
     st.stop()
 
-# --- FONCTIONS DE RÉSILIENCE ---
-def ask_gemini_text(prompt, max_retries=3):
-    full_prompt = f"Règle absolue : Réponds uniquement en français.\n{prompt}"
-    for attempt in range(max_retries):
-        try:
-            response = model.generate_content(full_prompt)
-            if response.text: return response.text
-        except Exception:
-            time.sleep(2 ** attempt)
-    return "L'analyse est indisponible pour le moment."
+# --- GESTION DES PRÉFÉRENCES (J'AIME / J'AIME PAS) ---
+PREFS_FILE = Path("preferences.json")
 
-def ask_gemini_json(prompt, max_retries=3):
-    full_prompt = f"Règle absolue : Tu dois répondre UNIQUEMENT avec un objet JSON valide en français, sans aucun formatage Markdown.\n\n{prompt}"
-    for attempt in range(max_retries):
-        try:
-            response = model.generate_content(full_prompt)
-            clean_text = response.text.replace('```json', '').replace('```', '').strip()
-            return json.loads(clean_text)
-        except Exception:
-            time.sleep(2 ** attempt)
-    return None
+def load_preferences():
+    if PREFS_FILE.exists():
+        with open(PREFS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
 
-def fetch_json_api(url, max_retries=3, timeout=10):
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(url, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
-        except:
-            time.sleep(2 ** attempt)
-    return None
+def save_preference(category, title, feedback):
+    prefs = load_preferences()
+    # Éviter les doublons le même jour
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    for p in prefs:
+        if p["date"] == today and p["category"] == category and p["title"] == title:
+            p["feedback"] = feedback # Met à jour si on change d'avis
+            with open(PREFS_FILE, "w", encoding="utf-8") as f: json.dump(prefs, f, ensure_ascii=False, indent=4)
+            return
+            
+    prefs.append({"date": today, "category": category, "title": title, "feedback": feedback})
+    with open(PREFS_FILE, "w", encoding="utf-8") as f:
+        json.dump(prefs, f, ensure_ascii=False, indent=4)
+    st.toast(f"Préférence enregistrée : {feedback} pour {title} ! 💾")
 
-# --- LOGIQUE MÉTIER ---
-class CultureApp:
-    def __init__(self):
-        today = datetime.date.today().strftime("%Y-%m-%d")
-        self.seed = int(hashlib.md5(today.encode()).hexdigest(), 16) % (10**8)
-        random.seed(self.seed)
+# --- FONCTION API DEEPSEEK (AVEC MISE EN CACHE) ---
+# Le décorateur @st.cache_data sauvegarde le résultat pour la journée.
+# Si le "seed" est le même, la fonction ne relance pas l'API = 0 surcoût !
+@st.cache_data(show_spinner=False, ttl=86400) # Cache expire après 24h
+def ask_deepseek_json(prompt, seed):
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "Tu es un expert culturel français. Tu DOIS répondre exclusivement au format JSON valide, sans balises Markdown (` ```json `), uniquement l'objet JSON."},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"} # Force le JSON strict sur DeepSeek
+    }
+    
+    try:
+        response = requests.post("[https://api.deepseek.com/chat/completions](https://api.deepseek.com/chat/completions)", headers=headers, json=payload, timeout=20)
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        # Nettoyage si jamais DeepSeek ajoute quand même des balises
+        clean_text = content.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_text)
+    except Exception as e:
+        return {"erreur": f"Erreur de génération : {str(e)}"}
 
-    def get_art(self):
-        ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529]
-        obj_id = random.choice(ids)
-        art = fetch_json_api(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}")
+@st.cache_data(show_spinner=False, ttl=86400)
+def fetch_met_art(seed):
+    # IDs d'oeuvres garanties d'avoir de belles images
+    ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529, 437112, 436121, 459123]
+    random.seed(seed)
+    obj_id = random.choice(ids)
+    try:
+        res = requests.get(f"[https://collectionapi.metmuseum.org/public/collection/v1/objects/](https://collectionapi.metmuseum.org/public/collection/v1/objects/){obj_id}", timeout=10)
+        res.raise_for_status()
+        art = res.json()
         
-        if not art:
-             return {"title": "Œuvre indisponible", "author": "API Déconnectée", "image": None, "analyse": "Impossible de contacter le musée."}
-
-        title = art.get('title', 'Inconnue')
-        artist = art.get('artistDisplayName', 'Inconnu')
+        # On passe à DeepSeek pour l'analyse
+        prompt = f"Génère une analyse captivante (5 phrases) de l'œuvre '{art.get('title')}' de {art.get('artistDisplayName')}. Traduis le titre. Renvoie un JSON avec les clés: 'titre_fr', 'analyse'."
+        ds_data = ask_deepseek_json(prompt, seed)
         
-        prompt = f"Fais une analyse artistique de 5 à 7 phrases de l'œuvre '{title}' de {artist}. Traduis le titre en français."
-        analysis = ask_gemini_text(prompt)
-        return {"title": title, "author": artist, "image": art.get('primaryImageSmall'), "analyse": analysis}
+        return {
+            "title": ds_data.get('titre_fr', art.get('title')),
+            "author": art.get('artistDisplayName', 'Inconnu'),
+            "image": art.get('primaryImageSmall'),
+            "analyse": ds_data.get('analyse', 'Erreur analyse.'),
+            "link": art.get('objectURL')
+        }
+    except:
+        return {"erreur": True}
 
-    def get_poem(self):
-        prompt = f"Graine : {self.seed}. Choisis un poème de la littérature française. Renvoie un JSON avec : 'titre', 'auteur', 'extrait', et 'analyse'."
-        data = ask_gemini_json(prompt)
-        if data: return data
-        return {"titre": "Le Dormeur du val", "auteur": "Arthur Rimbaud", "extrait": "C'est un trou de verdure...", "analyse": "Texte non chargé."}
+# --- GENERATION DES DONNÉES ---
+today_str = datetime.date.today().strftime("%Y-%m-%d")
+daily_seed = int(hashlib.md5(today_str.encode()).hexdigest(), 16) % (10**8)
 
-    def get_cinema(self):
-        prompt = f"Graine : {self.seed}. Choisis un chef-d'œuvre du cinéma. Renvoie un JSON avec : 'titre', 'realisateur', 'annee', et 'analyse'."
-        data = ask_gemini_json(prompt)
-        if data: return data
-        return {"titre": "Film indisponible", "realisateur": "Inconnu", "annee": "", "analyse": "Erreur."}
+def get_daily_content():
+    with st.spinner("L'API DeepSeek prépare votre exposition (Mise en cache en cours...)"):
+        # Art (MET API + DeepSeek)
+        art = fetch_met_art(daily_seed)
+        
+        # Poésie
+        prompt_poem = f"Graine : {daily_seed}. Choisis un poème magnifique de la littérature française classique. Renvoie un JSON avec : 'titre', 'auteur', 'poeme_entier' (le texte COMPLET du poème avec les retours à la ligne \\n), 'analyse' (5 phrases)."
+        poem = ask_deepseek_json(prompt_poem, daily_seed + 1)
+        
+        # Musique
+        prompt_song = f"Graine : {daily_seed}. Choisis une chanson culte. Renvoie un JSON avec : 'titre', 'artiste', 'annee', 'analyse' (5 phrases sur l'impact de la chanson)."
+        song = ask_deepseek_json(prompt_song, daily_seed + 2)
+        
+        # Cinéma
+        prompt_cine = f"Graine : {daily_seed}. Choisis un grand film classique ou d'auteur. Renvoie un JSON avec : 'titre', 'realisateur', 'annee', 'analyse' (5 phrases)."
+        cine = ask_deepseek_json(prompt_cine, daily_seed + 3)
+        
+        # Philo
+        prompt_philo = f"Graine : {daily_seed}. Choisis un concept philosophique applicable à la vie moderne. Renvoie un JSON avec : 'concept', 'philosophe', 'analyse' (5 phrases)."
+        philo = ask_deepseek_json(prompt_philo, daily_seed + 4)
+        
+        return art, poem, song, cine, philo
 
-    def get_philosophy(self):
-        prompt = f"Graine : {self.seed}. Choisis un concept philosophique. Renvoie un JSON avec : 'concept', 'philosophe', et 'analyse'."
-        data = ask_gemini_json(prompt)
-        if data: return data
-        return {"concept": "Concept indisponible", "philosophe": "Inconnu", "analyse": "Erreur."}
+# Chargement (depuis le cache si déjà fait aujourd'hui)
+art_data, poem_data, song_data, cine_data, philo_data = get_daily_content()
 
-    def get_song(self):
-        prompt = f"Graine : {self.seed}. Choisis une chanson légendaire. Renvoie un JSON avec : 'titre', 'artiste', 'annee', et 'analyse'."
-        data = ask_gemini_json(prompt)
-        if data: return data
-        return {"titre": "Chanson indisponible", "artiste": "Inconnu", "annee": "", "analyse": "Erreur."}
+# --- HELPER POUR RECHERCHES ---
+def wiki_link(query):
+    safe_query = urllib.parse.quote(query)
+    return f"[https://fr.wikipedia.org/wiki/Spécial:Recherche?search=](https://fr.wikipedia.org/wiki/Spécial:Recherche?search=){safe_query}"
 
-# --- INTERFACE ---
-app = CultureApp()
+def yt_music_link(artist, title):
+    safe_query = urllib.parse.quote(f"{artist} {title}")
+    return f"[https://music.youtube.com/search?q=](https://music.youtube.com/search?q=){safe_query}"
 
+# --- INTERFACE UTILISATEUR ---
 st.title("L'Éveil Culturel")
-st.markdown(f"<p style='text-align: center; color: #7f8c8d; font-style: italic; margin-top: -30px; margin-bottom: 50px;'>L'Exposition du {datetime.date.today().strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
-
-with st.spinner("Le curateur dispose les œuvres dans la galerie..."):
-    art_data = app.get_art()
-    philo_data = app.get_philosophy()
-    poem_data = app.get_poem()
-    cine_data = app.get_cinema()
-    song_data = app.get_song()
-
-# --- AFFICHAGE MAGNIFIÉ ---
+st.markdown(f"<p style='text-align: center; color: #7f8c8d; font-style: italic; margin-top: -30px; margin-bottom: 40px;'>L'Exposition du {datetime.date.today().strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
 
 # 1. ART
-st.markdown(f"""
-<div class="culture-card">
-    <div class="card-title">🖼️ {art_data.get('title', 'Sans titre')}</div>
-    <div class="card-subtitle">{art_data.get('author', 'Inconnu')}</div>
-</div>
-""", unsafe_allow_html=True)
-if art_data.get("image"):
-    st.image(art_data["image"])
-st.markdown(f'<div class="analysis-box">{art_data.get("analyse", art_data.get("analysis", "Analyse indisponible."))}</div>', unsafe_allow_html=True)
-st.write("---")
-
-# 2. PHILOSOPHIE
-st.markdown(f"""
-<div class="culture-card">
-    <div class="card-title">🧠 {philo_data.get('concept', 'Concept inconnu')}</div>
-    <div class="card-subtitle">{philo_data.get('philosophe', 'Auteur inconnu')}</div>
-    <div class="analysis-box">{philo_data.get("analyse", philo_data.get("analysis", "Analyse indisponible."))}</div>
-</div>
-""", unsafe_allow_html=True)
-
-# 3. POÉSIE
-extrait_html = poem_data.get('extrait', 'Extrait non disponible').replace('\n', '<br>')
-st.markdown(f"""
-<div class="culture-card">
-    <div class="card-title">📜 {poem_data.get('titre', 'Poème inconnu')}</div>
-    <div class="card-subtitle">{poem_data.get('auteur', 'Auteur inconnu')}</div>
-    <div style="font-family: 'Playfair Display', serif; font-size: 1.2rem; line-height: 1.8; margin: 20px 0; padding-left: 20px; border-left: 2px solid #eee;">
-        {extrait_html}
+if not art_data.get("erreur"):
+    st.markdown(f"""
+    <div class="culture-card">
+        <div class="card-title">🖼️ {art_data.get('title')}</div>
+        <div class="card-subtitle">{art_data.get('author')}</div>
     </div>
-    <div class="analysis-box">{poem_data.get("analyse", poem_data.get("analysis", "Analyse indisponible."))}</div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+    if art_data.get("image"): st.image(art_data["image"])
+    st.markdown(f'<div class="analysis-box">{art_data.get("analyse")}</div>', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("👍", key="art_like"): save_preference("Art", art_data.get("title"), "Aime")
+    with col2:
+        if st.button("👎", key="art_dislike"): save_preference("Art", art_data.get("title"), "N'aime pas")
+    with col3:
+        st.markdown(f"<a href='{art_data.get('link')}' target='_blank' class='deep-link'>🔍 Voir l'œuvre sur le site du MET</a>", unsafe_allow_html=True)
+    st.write("---")
 
-# 4. MUSIQUE
-st.markdown(f"""
-<div class="culture-card">
-    <div class="card-title">🎵 {song_data.get('titre', 'Chanson inconnue')}</div>
-    <div class="card-subtitle">{song_data.get('artiste', 'Artiste inconnu')} ({song_data.get('annee', '')})</div>
-    <div class="analysis-box">{song_data.get("analyse", song_data.get("analysis", "Analyse indisponible."))}</div>
-</div>
-""", unsafe_allow_html=True)
+# 2. POÉSIE
+if not poem_data.get("erreur"):
+    titre = poem_data.get('titre', 'Inconnu')
+    auteur = poem_data.get('auteur', 'Inconnu')
+    st.markdown(f"""
+    <div class="culture-card">
+        <div class="card-title">📜 {titre}</div>
+        <div class="card-subtitle">{auteur}</div>
+        <div class="poem-box">{poem_data.get('poeme_entier', 'Texte non disponible')}</div>
+        <div class="analysis-box">{poem_data.get('analyse')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("👍", key="poem_like"): save_preference("Poésie", titre, "Aime")
+    with col2:
+        if st.button("👎", key="poem_dislike"): save_preference("Poésie", titre, "N'aime pas")
+    with col3:
+        st.markdown(f"<a href='{wiki_link(auteur)}' target='_blank' class='deep-link'>📖 Découvrir {auteur} sur Wikipédia</a>", unsafe_allow_html=True)
+    st.write("---")
 
-# 5. CINÉMA
-st.markdown(f"""
-<div class="culture-card">
-    <div class="card-title">🎬 {cine_data.get('titre', 'Film inconnu')}</div>
-    <div class="card-subtitle">{cine_data.get('realisateur', 'Réalisateur inconnu')} ({cine_data.get('annee', '')})</div>
-    <div class="analysis-box">{cine_data.get("analyse", cine_data.get("analysis", "Analyse indisponible."))}</div>
-</div>
-""", unsafe_allow_html=True)
+# 3. MUSIQUE
+if not song_data.get("erreur"):
+    titre = song_data.get('titre', 'Inconnu')
+    artiste = song_data.get('artiste', 'Inconnu')
+    st.markdown(f"""
+    <div class="culture-card">
+        <div class="card-title">🎵 {titre}</div>
+        <div class="card-subtitle">{artiste} ({song_data.get('annee', '')})</div>
+        <div class="analysis-box">{song_data.get('analyse')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("👍", key="song_like"): save_preference("Musique", titre, "Aime")
+    with col2:
+        if st.button("👎", key="song_dislike"): save_preference("Musique", titre, "N'aime pas")
+    with col3:
+        st.markdown(f"<a href='{yt_music_link(artiste, titre)}' target='_blank' class='deep-link'>🎧 Écouter sur YouTube Music</a>", unsafe_allow_html=True)
+    st.write("---")
+
+# 4. CINÉMA
+if not cine_data.get("erreur"):
+    titre = cine_data.get('titre', 'Inconnu')
+    realisateur = cine_data.get('realisateur', 'Inconnu')
+    st.markdown(f"""
+    <div class="culture-card">
+        <div class="card-title">🎬 {titre}</div>
+        <div class="card-subtitle">{realisateur} ({cine_data.get('annee', '')})</div>
+        <div class="analysis-box">{cine_data.get('analyse')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("👍", key="cine_like"): save_preference("Cinéma", titre, "Aime")
+    with col2:
+        if st.button("👎", key="cine_dislike"): save_preference("Cinéma", titre, "N'aime pas")
+    with col3:
+        st.markdown(f"<a href='{wiki_link(titre + ' film')}' target='_blank' class='deep-link'>🎞️ Fiche du film sur Wikipédia</a>", unsafe_allow_html=True)
+    st.write("---")
+
+# 5. PHILOSOPHIE
+if not philo_data.get("erreur"):
+    concept = philo_data.get('concept', 'Inconnu')
+    philosophe = philo_data.get('philosophe', 'Inconnu')
+    st.markdown(f"""
+    <div class="culture-card">
+        <div class="card-title">🧠 {concept}</div>
+        <div class="card-subtitle">{philosophe}</div>
+        <div class="analysis-box">{philo_data.get('analyse')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("👍", key="philo_like"): save_preference("Philosophie", concept, "Aime")
+    with col2:
+        if st.button("👎", key="philo_dislike"): save_preference("Philosophie", concept, "N'aime pas")
+    with col3:
+        st.markdown(f"<a href='{wiki_link(concept)}' target='_blank' class='deep-link'>📚 Approfondir ce concept</a>", unsafe_allow_html=True)
