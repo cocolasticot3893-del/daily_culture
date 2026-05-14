@@ -171,7 +171,7 @@ def ask_deepseek(prompt, seed, retries=2):
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_content_item(category_name, date_str, offset, used_titles_str):
     prompts = {
-        "Poésie": "{'titre': '...', 'auteur': 'Nom exact', 'contenu': 'Le poème entier', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
+        "Poésie": "{'titre': '...', 'auteur': 'Nom exact', 'contenu': 'Le texte INTÉGRAL du poème avec tous les vers et sauts de ligne (\\n)', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
         "Littérature": "{'titre': '...', 'auteur': 'Nom exact', 'contenu': 'Extrait marquant du livre', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
         "Musique": "{'titre': '...', 'artiste': 'Nom exact', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Artiste'}",
         "Sciences": "{'titre': '...', 'inventeur': 'Nom exact', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention ou Inventeur'}",
@@ -185,6 +185,7 @@ def get_content_item(category_name, date_str, offset, used_titles_str):
     # Règle anti-doublon et anti-confusion poésie/littérature
     extra_rule = f"Règle stricte: NE PROPOSE PAS les œuvres suivantes ({used_titles_str}). "
     if category_name == "Littérature": extra_rule += "Propose un roman, essai ou pièce de théâtre, SURTOUT PAS DE POÉSIE. "
+    if category_name == "Poésie": extra_rule += "Règle OBLIGATOIRE: Le champ 'contenu' doit contenir le poème dans son INTÉGRALITÉ, du premier au dernier vers, sans jamais le tronquer ou le résumer. "
     
     prompt = f"Édition du {date_str} (Hachage {offset}). {extra_rule} Propose une œuvre fascinante pour la catégorie : {category_name}. Format JSON attendu : {prompts[category_name]}"
     
