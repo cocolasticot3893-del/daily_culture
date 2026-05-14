@@ -18,29 +18,44 @@ except ImportError:
     HAS_GTTS = False
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="L'Éveil Culturel", page_icon="🏛️", layout="centered")
+st.set_page_config(page_title="Le Banquet des Muses", page_icon="🏛️", layout="centered")
 
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Source+Sans+Pro:wght@300;400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&display=swap');
     
-    h1, h2, h3 { font-family: 'Playfair Display', serif; color: #1a252f; text-align: center; }
-    h1 { font-size: 3rem; border-bottom: 3px solid #d4af37; padding-bottom: 25px; margin-bottom: 40px; }
-    p, div, span { font-family: 'Source Sans Pro', sans-serif; font-size: 1.15rem; line-height: 1.8; }
+    /* Fond couleur Marbre/Travertin antique */
+    .stApp { background-color: #f4f1ea; }
     
+    /* Typographie des titres - Inscriptions Romaines */
+    h1, h2, h3 { font-family: 'Cinzel', serif; color: #4a3424; text-align: center; text-transform: uppercase; letter-spacing: 1px; }
+    h1 { font-size: 3.2rem; border-bottom: 2px solid #800020; padding-bottom: 15px; margin-bottom: 40px; color: #800020; }
+    
+    /* Corps de texte élégant */
+    p, div, span { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; line-height: 1.7; color: #2b2b2b; }
+    
+    /* Encadré Poésie façon parchemin */
     .poem-box { 
-        font-family: 'Playfair Display', serif; font-size: 1.3rem; line-height: 2; 
-        padding-left: 25px; border-left: 4px solid #d4af37; white-space: pre-wrap; 
-        color: #1a252f; margin: 25px 0; background-color: #fcfcf9; padding: 25px; border-radius: 0 12px 12px 0;
-        box-shadow: inset 0 0 10px rgba(0,0,0,0.02);
+        font-family: 'Cormorant Garamond', serif; font-size: 1.45rem; line-height: 2; font-style: italic;
+        padding: 25px; border: 1px solid #d3c4a3; white-space: pre-wrap; 
+        color: #3b2f2f; margin: 25px 0; background-color: #fdfbf7; border-radius: 2px;
+        box-shadow: inset 0 0 15px rgba(0,0,0,0.03);
     }
     
+    /* Encadré Citation façon fronton */
     .quote-box { 
-        text-align: center; font-family: 'Playfair Display', serif; font-size: 1.6rem; font-style: italic; color: #b8860b; padding: 40px; margin-bottom: 50px; background: #fdfbf7; border-radius: 15px; border: 1px solid #f0ece1; box-shadow: 0 10px 25px rgba(0,0,0,0.03);
+        text-align: center; font-family: 'Cinzel', serif; font-size: 1.4rem; color: #800020; 
+        padding: 40px; margin-bottom: 50px; background: #fcfaf5; 
+        border-radius: 2px; border-top: 3px double #d3c4a3; border-bottom: 3px double #d3c4a3;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.04);
     }
     
-    [data-testid="stImage"] img { border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,0.12); margin-bottom: 25px; border: 1px solid #eee; object-fit: cover; max-height: 500px; width: 100%;}
-    .stButton button { width: 100%; border-radius: 8px; height: 50px; font-weight: 600; }
+    /* Images bordées comme des fresques */
+    [data-testid="stImage"] img { border-radius: 2px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); margin-bottom: 25px; border: 3px solid #d3c4a3; object-fit: cover; max-height: 500px; width: 100%;}
+    
+    /* Boutons sculptés */
+    .stButton button { width: 100%; border-radius: 2px; height: 50px; font-family: 'Cinzel', serif; font-weight: 600; border: 1px solid #d3c4a3; background-color: #fdfbf7; color: #4a3424; letter-spacing: 1px; }
+    .stButton button:hover { border-color: #800020; color: #800020; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -252,11 +267,12 @@ def render_block_safe(icon, label, data, date_str, context_id, color="#d4af37"):
         with c2:
             if st.button("👎 Bof", key=f"btn_d_{safe_key}"): save_pref(label, titre, auteur, False, date_str)
         
-        if wiki:
-            btn_label = "🎧 Écouter" if label == "Musique" else "📖 Approfondir"
-            if label == "Musique" and "wikipedia" not in wiki.lower():
-                 wiki = f"https://music.youtube.com/search?q={urllib.parse.quote(auteur + ' ' + titre)}"
-            st.link_button(btn_label, wiki, use_container_width=True)
+        # Correction absolue pour forcer YouTube Music
+        if label == "Musique":
+            yt_link = f"https://music.youtube.com/search?q={urllib.parse.quote(auteur + ' ' + titre)}"
+            st.link_button("🎧 Écouter sur YouTube Music", yt_link, use_container_width=True)
+        elif wiki:
+            st.link_button("📖 Approfondir", wiki, use_container_width=True)
 
 def display_exposition(target_date, context_id):
     date_str = target_date.strftime("%Y-%m-%d")
@@ -267,30 +283,30 @@ def display_exposition(target_date, context_id):
         quote = ask_deepseek(f"Citation courte. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
         art = get_art_safe(date_str)
         
-        # Le NOUVEL ORDRE
+        # Le NOUVEL ORDRE avec des teintes romaines classiques
         blocks = [
-            ("Poésie", "#8e44ad", "📜"),
-            ("Littérature", "#d35400", "📚"),
-            ("Musique", "#c0392b", "🎵"),
-            ("Sciences", "#2980b9", "🌍"),
-            ("Philosophie", "#16a085", "🧠"),
-            ("Cinéma", "#34495e", "🎬"),
-            ("Architecture", "#2c3e50", "🏛️"),
-            ("Mythologie", "#e67e22", "⚡"),
-            ("Gastronomie", "#27ae60", "🍷")
+            ("Poésie", "#5a3a29", "📜"),
+            ("Littérature", "#800020", "📚"),
+            ("Musique", "#6b4423", "🎵"),
+            ("Sciences", "#2f4f4f", "🌍"),
+            ("Philosophie", "#4a3424", "🧠"),
+            ("Cinéma", "#3b2f2f", "🎬"),
+            ("Architecture", "#555555", "🏛️"),
+            ("Mythologie", "#8b4513", "⚡"),
+            ("Gastronomie", "#6b2737", "🍷")
         ]
         
         if not quote.get("erreur"):
             st.markdown(f"<div class='quote-box'>« {quote.get('citation')} »<br><small>— {quote.get('auteur')}</small></div>", unsafe_allow_html=True)
             
-        render_block_safe("🖼️", "Beaux-Arts", art, date_str, context_id, color="#b8860b")
+        render_block_safe("🖼️", "Beaux-Arts", art, date_str, context_id, color="#800020")
             
         for name, color, icon in blocks:
             data = get_content_item(name, date_str)
             render_block_safe(icon, name, data, date_str, context_id, color)
 
 # --- APP PRINCIPALE ---
-st.title("L'Éveil Culturel")
+st.title("Le Banquet des Muses")
 t1, t2, t3 = st.tabs(["✨ Aujourd'hui", "📅 Archives", "⭐ Favoris"])
 
 with t1: display_exposition(datetime.date.today(), context_id="today")
