@@ -128,7 +128,7 @@ def extract_json(text):
 
 def get_wiki_image(query, lang="fr"):
     if not query: return None
-    headers = {"User-Agent": "Banquet_Des_Muses_App/4.1 (contact@example.com)"}
+    headers = {"User-Agent": "Banquet_Des_Muses_App/4.2 (contact@example.com)"}
     try:
         search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(str(query))}&utf8=&format=json&srlimit=1"
         res = requests.get(search_url, headers=headers, timeout=8).json()
@@ -148,11 +148,12 @@ def get_wiki_image(query, lang="fr"):
     return None
 
 def fetch_image_cascade(res_dict, category):
-    primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture", "Littérature"] else "fr"
+    primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture", "Littérature", "Jeu vidéo", "Photographie"] else "fr"
     queries = [
         res_dict.get("image_query"), res_dict.get("titre"), res_dict.get("artiste"),
         res_dict.get("auteur"), res_dict.get("realisateur"), res_dict.get("philosophe"),
-        res_dict.get("inventeur"), res_dict.get("concept")
+        res_dict.get("inventeur"), res_dict.get("concept"), res_dict.get("sculpteur"),
+        res_dict.get("photographe"), res_dict.get("studio")
     ]
     queries = [str(q) for q in queries if q and len(str(q)) > 2]
 
@@ -201,7 +202,12 @@ def get_content_item(category_name, date_str):
         "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Film'}",
         "Architecture": "{'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Monument'}",
         "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Divinité'}",
-        "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Plat'}"
+        "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Plat'}",
+        "Sculpture": "{'titre': '...', 'sculpteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom de la sculpture'}",
+        "Arts de la scène": "{'titre': '...', 'auteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Pièce de théâtre ou ballet'}",
+        "Photographie": "{'titre': '...', 'photographe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre de la photographie'}",
+        "Bande dessinée": "{'titre': '...', 'auteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Série BD'}",
+        "Jeu vidéo": "{'titre': '...', 'studio': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du jeu vidéo'}"
     }
     
     # INJECTION DE L'HISTORIQUE (Anti-Répétition)
@@ -236,7 +242,7 @@ def render_block_safe(icon, label, data, date_str, context_id, color="#c5a059"):
     if not data or data.get("erreur"): return
     
     titre = data.get("titre") or data.get("concept") or "Inconnu"
-    auteur = data.get("auteur") or data.get("artiste") or data.get("realisateur") or data.get("philosophe") or data.get("inventeur") or data.get("origine") or data.get("lieu") or ""
+    auteur = data.get("auteur") or data.get("artiste") or data.get("realisateur") or data.get("philosophe") or data.get("inventeur") or data.get("origine") or data.get("lieu") or data.get("sculpteur") or data.get("photographe") or data.get("studio") or ""
     analyse = data.get("analyse") or ""
     image = data.get("image")
     wiki = data.get("lien_wiki")
@@ -283,7 +289,7 @@ def display_exposition(target_date, context_id):
         quote = ask_deepseek(f"Citation antique ou classique pour le {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
         art = get_art_safe(date_str)
         
-        # Nouvel Ordre Demandé
+        # Nouvel Ordre Demandé avec l'ajout des nouveaux arts
         blocks = [
             ("Poésie", "#c5a059", "📜"),
             ("Littérature", "#800020", "📚"),
@@ -293,7 +299,12 @@ def display_exposition(target_date, context_id):
             ("Cinéma", "#1a1a1a", "🎬"),
             ("Architecture", "#555555", "🏛️"),
             ("Mythologie", "#c5a059", "⚡"),
-            ("Gastronomie", "#800020", "🍷")
+            ("Gastronomie", "#800020", "🍷"),
+            ("Sculpture", "#696969", "🗿"),
+            ("Arts de la scène", "#8B0000", "🎭"),
+            ("Photographie", "#2F4F4F", "📷"),
+            ("Bande dessinée", "#B8860B", "🖋️"),
+            ("Jeu vidéo", "#2E8B57", "🎮")
         ]
         
         if not quote.get("erreur"):
