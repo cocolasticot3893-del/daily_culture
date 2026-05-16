@@ -76,8 +76,9 @@ if not DEEPSEEK_KEY:
     st.error("❌ CLÉ API MANQUANTE : Ajoutez 'DEEPSEEK_API_KEY' dans les Secrets.")
     st.stop()
 
-# --- GESTION DES FAVORIS ---
+# --- GESTION DES FAVORIS ET DE L'HISTORIQUE (MÉMOIRE ANTI-RÉPÉTITION) ---
 PREFS_FILE = Path("mes_favoris.json")
+HISTORY_FILE = Path("seen_history.json")
 
 def load_prefs():
     if PREFS_FILE.exists():
@@ -98,6 +99,24 @@ def save_pref(category, title, author, is_liked, date_str):
     with open(PREFS_FILE, "w", encoding="utf-8") as f: json.dump(prefs, f, ensure_ascii=False, indent=4)
     if is_liked: st.toast("Ajouté aux favoris ! ⭐")
 
+def load_history():
+    """Charge l'historique des œuvres déjà générées pour éviter les doublons."""
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
+        except: return {}
+    return {}
+
+def save_to_history(category, title):
+    """Enregistre le titre d'une œuvre pour ne plus la reproposer (limité aux 30 dernières)."""
+    if not title or title == "Inconnu": return
+    history = load_history()
+    if category not in history: history[category] = []
+    if title not in history[category]:
+        history[category].append(title)
+        history[category] = history[category][-30:] # On garde les 30 dernières en mémoire
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(history, f, ensure_ascii=False, indent=4)
+
 # --- FONCTIONS HELPERS ---
 def extract_json(text):
     try:
@@ -109,7 +128,7 @@ def extract_json(text):
 
 def get_wiki_image(query, lang="fr"):
     if not query: return None
-    headers = {"User-Agent": "Banquet_Des_Muses_App/4.0"}
+    headers = {"User-Agent": "Banquet_Des_Muses_App/4.1 (contact@example.com)"}
     try:
         search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(str(query))}&utf8=&format=json&srlimit=1"
         res = requests.get(search_url, headers=headers, timeout=8).json()
@@ -184,9 +203,22 @@ def get_content_item(category_name, date_str):
         "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Divinité'}",
         "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Plat'}"
     }
-    res = ask_deepseek(f"Édition du {date_str}. Œuvre pour : {category_name}. Format : {prompts[category_name]}", f"{date_str}_{category_name}")
+    
+    # INJECTION DE L'HISTORIQUE (Anti-Répétition)
+    history = load_history().get(category_name, [])
+    avoid_clause = ""
+    if history:
+        avoid_clause = f" INTERDICTION ABSOLUE de proposer ces œuvres (tu en as déjà parlé) : {', '.join(history)}."
+        
+    prompt_complet = f"Édition du {date_str}. Propose une NOUVELLE œuvre pour : {category_name}.{avoid_clause} Format strictement respecté : {prompts[category_name]}"
+    
+    res = ask_deepseek(prompt_complet, f"{date_str}_{category_name}")
     if not res.get("erreur"):
         res["image"] = fetch_image_cascade(res, category_name)
+        # Sauvegarde du titre généré dans la mémoire de l'app
+        titre_oeuvre = res.get("titre") or res.get("concept")
+        save_to_history(category_name, titre_oeuvre)
+        
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
@@ -236,8 +268,8 @@ def render_block_safe(icon, label, data, date_str, context_id, color="#c5a059"):
             if label == "Musique":
                 btn_label = "🎧 Écouter (YouTube Music)"
                 query = urllib.parse.quote(f"{auteur} {titre}")
-                # Lien profond (Intent Android) forçant le système à utiliser l'application installée via Brave ou Native
-                wiki = f"intent://music.youtube.com/search?q={query}#Intent;scheme=https;S.browser_fallback_url=https://music.youtube.com/search?q={query};end"
+                # Lien HTTPS classique pur, mieux supporté par Brave et l'OS Android pour les App Links
+                wiki = f"https://music.youtube.com/search?q={query}"
             else:
                 btn_label = "📖 Approfondir"
                 
