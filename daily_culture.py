@@ -12,43 +12,61 @@ from pathlib import Path
 # --- CONFIGURATION STREAMLIT ---
 st.set_page_config(page_title="Le Banquet des Muses", page_icon="🏛️", layout="centered")
 
-# --- ESTHÉTIQUE GRÉCO-ROMAINE (Cinzel & Cormorant) ---
+# CSS Premium (Style Gréco-Romain) et Correction Boutons
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&display=swap');
     
-    /* Fond couleur Marbre/Travertin antique */
-    .stApp { background-color: #f4f1ea; }
+    .stApp { background-color: #f4f1ea; color: #2b2b2b; }
     
-    /* Typographie des titres - Inscriptions Romaines */
-    h1, h2, h3 { font-family: 'Cinzel', serif; color: #4a3424; text-align: center; text-transform: uppercase; letter-spacing: 1px; }
-    h1 { font-size: 3.2rem; border-bottom: 2px solid #800020; padding-bottom: 15px; margin-bottom: 40px; color: #800020; }
+    h1, h2, h3 { font-family: 'Cinzel', serif; color: #1a1a1a; text-align: center; }
+    h1 { font-size: 3rem; border-bottom: 2px solid #800020; padding-bottom: 20px; margin-bottom: 40px; }
     
-    /* Corps de texte élégant */
-    p, div, span { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; line-height: 1.7; color: #2b2b2b; }
+    p, div, span { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; line-height: 1.7; }
     
-    /* Encadré Poésie façon parchemin */
     .poem-box { 
-        font-family: 'Cormorant Garamond', serif; font-size: 1.45rem; line-height: 2; font-style: italic;
-        padding: 25px; border: 1px solid #d3c4a3; white-space: pre-wrap; 
-        color: #3b2f2f; margin: 25px 0; background-color: #fdfbf7; border-radius: 2px;
-        box-shadow: inset 0 0 15px rgba(0,0,0,0.03);
+        font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; line-height: 1.9; 
+        padding-left: 25px; border-left: 3px solid #800020; white-space: pre-wrap; 
+        color: #1a1a1a; margin: 25px 0; background-color: #fdfbf7; padding: 25px; 
+        box-shadow: inset 0 0 10px rgba(0,0,0,0.03);
     }
     
-    /* Encadré Citation façon fronton */
     .quote-box { 
-        text-align: center; font-family: 'Cinzel', serif; font-size: 1.4rem; color: #800020; 
-        padding: 40px; margin-bottom: 50px; background: #fcfaf5; 
-        border-radius: 2px; border-top: 3px double #d3c4a3; border-bottom: 3px double #d3c4a3;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.04);
+        text-align: center; font-family: 'Cinzel', serif; font-size: 1.4rem; 
+        color: #800020; padding: 40px; margin-bottom: 50px; 
+        background: #fdfbf7; border: 1px solid #d4c4a8; 
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
     }
     
-    /* Images bordées comme des fresques */
-    [data-testid="stImage"] img { border-radius: 2px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); margin-bottom: 25px; border: 3px solid #d3c4a3; object-fit: cover; max-height: 500px; width: 100%;}
+    [data-testid="stImage"] img { 
+        border-radius: 4px; 
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15); 
+        margin-bottom: 25px; 
+        border: 2px solid #d4c4a8;
+    }
     
-    /* Boutons sculptés */
-    .stButton button { width: 100%; border-radius: 2px; height: 50px; font-family: 'Cinzel', serif; font-weight: 600; border: 1px solid #d3c4a3; background-color: #fdfbf7; color: #4a3424; letter-spacing: 1px; }
-    .stButton button:hover { border-color: #800020; color: #800020; }
+    .stButton button { 
+        width: 100%; border-radius: 4px; height: 50px; 
+        font-family: 'Cinzel', serif; font-weight: 600; letter-spacing: 1px;
+    }
+    
+    /* CORRECTION CRITIQUE DU BOUTON LIEN (Approfondir/Ecouter) */
+    [data-testid="stLinkButton"] a {
+        background-color: #111827 !important; /* Fond très sombre */
+        border: 1px solid #800020 !important;
+        border-radius: 4px !important;
+        text-decoration: none !important;
+    }
+    [data-testid="stLinkButton"] a p {
+        color: #fdfbf7 !important; /* TEXTE CLAIR OBLIGATOIRE SUR FOND SOMBRE */
+        font-family: 'Cinzel', serif !important;
+        font-weight: 600 !important;
+        letter-spacing: 1px !important;
+        margin: 0 !important;
+    }
+    [data-testid="stLinkButton"] a:hover {
+        background-color: #800020 !important; /* Rouge Romain au survol */
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -80,7 +98,7 @@ def save_pref(category, title, author, is_liked, date_str):
     with open(PREFS_FILE, "w", encoding="utf-8") as f: json.dump(prefs, f, ensure_ascii=False, indent=4)
     if is_liked: st.toast("Ajouté aux favoris ! ⭐")
 
-# --- FONCTIONS HELPERS (IMAGES & JSON) ---
+# --- FONCTIONS HELPERS ---
 def extract_json(text):
     try:
         match = re.search(r'\{.*\}', text.strip(), re.DOTALL)
@@ -91,7 +109,7 @@ def extract_json(text):
 
 def get_wiki_image(query, lang="fr"):
     if not query: return None
-    headers = {"User-Agent": "Le_Banquet_des_Muses/1.0 (contact@example.com)"}
+    headers = {"User-Agent": "Banquet_Des_Muses_App/4.0"}
     try:
         search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(str(query))}&utf8=&format=json&srlimit=1"
         res = requests.get(search_url, headers=headers, timeout=8).json()
@@ -102,207 +120,158 @@ def get_wiki_image(query, lang="fr"):
         res2 = requests.get(summary_url, headers=headers, timeout=8).json()
         
         url = None
-        if 'originalimage' in res2:
-            url = res2['originalimage']['source']
-        elif 'thumbnail' in res2:
-            thumb = res2['thumbnail']['source']
-            url = re.sub(r'\d+px-', '800px-', thumb) # On force une meilleure qualité
-        
+        if 'originalimage' in res2: url = res2['originalimage']['source']
+        elif 'thumbnail' in res2: url = res2['thumbnail']['source']
+            
         if url and url.startswith("//"): url = "https:" + url
         return url
     except: pass
     return None
 
 def fetch_image_cascade(res_dict, category):
-    """Recherche Wikipedia en priorité, puis Fallback sur IA générative Pollinations"""
-    primary_lang = "en" if category in ["Cinéma", "Musique", "Sciences"] else "fr"
-    
-    # Nettoyage sévère des mots-clés de recherche
+    primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture", "Littérature"] else "fr"
     queries = [
-        res_dict.get("image_query"),
-        res_dict.get("titre"),
-        res_dict.get("artiste"),
-        res_dict.get("auteur"),
-        res_dict.get("realisateur"),
-        res_dict.get("philosophe"),
-        res_dict.get("inventeur")
+        res_dict.get("image_query"), res_dict.get("titre"), res_dict.get("artiste"),
+        res_dict.get("auteur"), res_dict.get("realisateur"), res_dict.get("philosophe"),
+        res_dict.get("inventeur"), res_dict.get("concept")
     ]
-    queries = [str(q).split('\n')[0].strip() for q in queries if q and len(str(q)) > 2] # Évite les textes à rallonge
+    queries = [str(q) for q in queries if q and len(str(q)) > 2]
 
-    # 1. Wikipedia
+    # 1. Wikipédia
     for q in queries:
         img = get_wiki_image(q, primary_lang)
         if img: return img
         img = get_wiki_image(q, "fr" if primary_lang == "en" else "en")
         if img: return img
         
-    # 2. IA Pollinations (Fallback Absolu)
+    # 2. IA Pollinations (Fallback)
     if queries:
-        clean_query = re.sub(r'[^a-zA-Z0-9\s]', ' ', queries[0]).strip()
-        ai_prompt = f"Cinematic elegant high quality aesthetic photography of {clean_query}"
+        clean_query = re.sub(r'[^a-zA-Z0-9\s]', ' ', str(queries[0])).strip()
+        ai_prompt = f"Cinematic elegant high quality photography of {clean_query} for a {category} magazine"
         safe_prompt = urllib.parse.quote(ai_prompt)
         return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=500&nologo=true"
-        
     return None
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def ask_deepseek(prompt, seed, retries=2):
+def ask_deepseek(prompt, date_str):
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "Tu es un érudit français. Réponds STRICTEMENT en JSON pur et valide. Assure-toi que les champs 'auteur', 'philosophe' ou 'artiste' ne contiennent QUE le nom (pas de texte). Fournis des analyses très approfondies (10 phrases)."},
+            {"role": "system", "content": "Tu es un érudit classique. Analyses profondes (10 phrases). Pour la poésie, donne TOUJOURS le poème en ENTIER. Réponds STRICTEMENT en JSON pur."},
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"}
     }
-    for i in range(retries):
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            return extract_json(content)
-        except Exception as e:
-            time.sleep(2)
-            if i == retries - 1: return {"erreur": True, "details": str(e)}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        return extract_json(response.json()["choices"][0]["message"]["content"])
+    except Exception as e:
+        return {"erreur": True}
 
 # --- FONCTIONS DE CONTENU ---
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_content_item(category_name, date_str, offset, used_titles_str):
+def get_content_item(category_name, date_str):
     prompts = {
-        "Poésie": "{'titre': '...', 'auteur': 'Nom exact', 'contenu': 'Le texte INTÉGRAL du poème avec tous les vers et sauts de ligne (\\n)', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
-        "Littérature": "{'titre': '...', 'auteur': 'Nom exact', 'contenu': 'Extrait marquant du livre', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
-        "Musique": "{'titre': '...', 'artiste': 'Nom exact', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Artiste'}",
-        "Sciences": "{'titre': '...', 'inventeur': 'Nom exact', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention ou Inventeur'}",
-        "Philosophie": "{'concept': '...', 'philosophe': 'Nom exact', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe'}",
-        "Cinéma": "{'titre': '...', 'realisateur': 'Nom exact', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du film original'}",
-        "Architecture": "{'titre': '...', 'lieu': 'Nom exact', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom monument'}",
-        "Mythologie": "{'titre': '...', 'origine': 'Civilisation', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Sujet du mythe'}",
-        "Gastronomie": "{'titre': '...', 'origine': 'Lieu', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom du plat'}"
+        "Poésie": "{'titre': '...', 'auteur': '...', 'poeme_entier': 'Le texte INTÉGRAL du poème', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
+        "Littérature": "{'titre': '...', 'auteur': '...', 'extrait': 'Extrait de roman/essai...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Livre ou Auteur'}",
+        "Musique": "{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Artiste musical'}",
+        "Sciences": "{'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention'}",
+        "Philosophie": "{'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe'}",
+        "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Film'}",
+        "Architecture": "{'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Monument'}",
+        "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Divinité'}",
+        "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Plat'}"
     }
-    
-    # Règle anti-doublon et anti-confusion poésie/littérature
-    extra_rule = f"Règle stricte: NE PROPOSE PAS les œuvres suivantes ({used_titles_str}). "
-    if category_name == "Littérature": extra_rule += "Propose un roman, essai ou pièce de théâtre, SURTOUT PAS DE POÉSIE. "
-    if category_name == "Poésie": extra_rule += "Règle OBLIGATOIRE: Le champ 'contenu' doit contenir le poème dans son INTÉGRALITÉ, du premier au dernier vers, sans jamais le tronquer ou le résumer. "
-    
-    prompt = f"Édition du {date_str} (Hachage {offset}). {extra_rule} Propose une œuvre fascinante pour la catégorie : {category_name}. Format JSON attendu : {prompts[category_name]}"
-    
-    res = ask_deepseek(prompt, f"{date_str}_{category_name}_{offset}")
+    res = ask_deepseek(f"Édition du {date_str}. Œuvre pour : {category_name}. Format : {prompts[category_name]}", f"{date_str}_{category_name}")
     if not res.get("erreur"):
         res["image"] = fetch_image_cascade(res, category_name)
     return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
 def get_art_safe(date_str):
-    seed_val = int(date_str.replace("-", ""))
-    random.seed(seed_val)
+    random.seed(int(date_str.replace("-", "")))
     ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529, 437112, 436121, 459123]
     try:
         r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=15).json()
-        ds = ask_deepseek(f"Analyse riche de l'œuvre '{r.get('title')}' par {r.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}", date_str)
-        return {
-            "titre": ds.get('titre_fr', r.get('title', 'Sans Titre')),
-            "auteur": r.get('artistDisplayName', 'Anonyme'),
-            "image": r.get('primaryImageSmall'),
-            "analyse": ds.get('analyse', 'Analyse en cours...'),
-            "lien_wiki": ds.get('lien_wiki') or r.get('objectURL')
-        }
+        ds = ask_deepseek(f"Analyse de '{r.get('title')}' par {r.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}", date_str)
+        return {"titre": ds.get('titre_fr', r.get('title')), "auteur": r.get('artistDisplayName'), "image": r.get('primaryImageSmall'), "analyse": ds.get('analyse'), "lien_wiki": ds.get('lien_wiki') or r.get('objectURL')}
     except: return {"erreur": True}
 
 # --- AFFICHAGE ---
-def render_block_safe(icon, label, data, date_str, context_id, color="#d4af37"):
+def render_block_safe(icon, label, data, date_str, context_id, color="#c5a059"):
     if not data or data.get("erreur"): return
     
-    # Nettoyage basique si l'IA met du texte dans les champs d'auteur
-    titre = str(data.get("titre") or data.get("concept") or "Inconnu").strip()
-    auteur = str(data.get("auteur") or data.get("artiste") or data.get("realisateur") or data.get("philosophe") or data.get("inventeur") or data.get("origine") or data.get("lieu") or "").split('\n')[0].strip()
-    analyse = data.get("analyse") or "Analyse indisponible."
+    titre = data.get("titre") or data.get("concept") or "Inconnu"
+    auteur = data.get("auteur") or data.get("artiste") or data.get("realisateur") or data.get("philosophe") or data.get("inventeur") or data.get("origine") or data.get("lieu") or ""
+    analyse = data.get("analyse") or ""
     image = data.get("image")
     wiki = data.get("lien_wiki")
-    
-    content_text = data.get("contenu") or data.get("poeme_entier") or data.get("extrait")
-    
+    content_text = data.get("poeme_entier") or data.get("extrait")
     safe_key = f"{label}_{date_str}_{context_id}"
 
     with st.container(border=True):
         st.markdown(f"""
             <div style="text-align: center; margin-bottom: 25px;">
-                <span style="color: {color}; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; font-size: 0.9rem;">{icon} {label}</span>
-                <h2 style="margin: 10px 0 5px 0; font-size: 2.2rem;">{titre}</h2>
-                <h4 style="font-style: italic; color: #7f8c8d; font-weight: normal; margin-top: 0;">{auteur}</h4>
-                <hr style="width: 50px; margin: 15px auto; border: 1px solid {color};">
+                <span style="color: {color}; font-family: 'Cinzel', serif; font-weight: 700; text-transform: uppercase; letter-spacing: 3px; font-size: 1rem;">{icon} {label}</span>
+                <h2 style="margin: 15px 0 5px 0; font-size: 2.4rem; color: #1a1a1a;">{titre}</h2>
+                <h4 style="font-family: 'Cormorant Garamond', serif; font-style: italic; color: #555; font-size: 1.4rem; font-weight: normal; margin-top: 0;">{auteur}</h4>
+                <hr style="width: 60px; margin: 20px auto; border: 1px solid {color};">
             </div>
         """, unsafe_allow_html=True)
         
-        if image: 
-            st.image(image, use_container_width=True)
-            
-        if content_text: 
-            st.markdown(f'<div class="poem-box">{content_text}</div>', unsafe_allow_html=True)
-            
+        if image: st.image(image, use_container_width=True)
+        if content_text: st.markdown(f'<div class="poem-box">{content_text}</div>', unsafe_allow_html=True)
         st.write(analyse)
         
         st.write("")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("👍 J'aime", key=f"btn_l_{safe_key}", use_container_width=True): save_pref(label, titre, auteur, True, date_str)
+            if st.button("👍 J'aime", key=f"btn_l_{safe_key}"): save_pref(label, titre, auteur, True, date_str)
         with c2:
-            if st.button("👎 Bof", key=f"btn_d_{safe_key}", use_container_width=True): save_pref(label, titre, auteur, False, date_str)
+            if st.button("👎 Bof", key=f"btn_d_{safe_key}"): save_pref(label, titre, auteur, False, date_str)
         
-        # Redirection YouTube Music forcée
-        if label == "Musique":
-            yt_link = f"https://music.youtube.com/search?q={urllib.parse.quote(auteur + ' ' + titre)}"
-            st.link_button("🎧 Écouter sur YouTube Music", yt_link, use_container_width=True)
-        elif wiki:
-            st.link_button("📖 Approfondir", wiki, use_container_width=True)
+        if wiki:
+            if label == "Musique":
+                btn_label = "🎧 Écouter (YouTube Music)"
+                query = urllib.parse.quote(f"{auteur} {titre}")
+                # Lien profond (Intent Android) forçant le système à utiliser l'application installée via Brave ou Native
+                wiki = f"intent://music.youtube.com/search?q={query}#Intent;scheme=https;S.browser_fallback_url=https://music.youtube.com/search?q={query};end"
+            else:
+                btn_label = "📖 Approfondir"
+                
+            st.link_button(btn_label, wiki, use_container_width=True)
 
 def display_exposition(target_date, context_id):
     date_str = target_date.strftime("%Y-%m-%d")
-    
-    st.markdown(f"<p style='text-align: center; color: #7f8c8d; font-size: 1.3rem; font-style: italic;'>Édition du {target_date.strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='text-align: center; color: #555; font-size: 1.4rem; font-style: italic;'>Édition du {target_date.strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
 
-    with st.spinner("Le curateur sélectionne les œuvres du banquet..."):
-        quote = ask_deepseek(f"Citation inspirante sur la sagesse ou l'art. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
-        
-        # Traitement séquentiel pour nourrir la liste des doublons
-        used_titles = []
-        
+    with st.spinner("Les Muses préparent le banquet..."):
+        quote = ask_deepseek(f"Citation antique ou classique pour le {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
         art = get_art_safe(date_str)
-        if not art.get("erreur"): used_titles.append(art.get("titre", ""))
         
-        blocks_config = [
-            ("Poésie", 2, "#5a3a29", "📜"),
-            ("Littérature", 3, "#800020", "📚"),
-            ("Musique", 4, "#6b4423", "🎵"),
-            ("Sciences", 5, "#2f4f4f", "🌍"),
-            ("Philosophie", 6, "#4a3424", "🧠"),
-            ("Cinéma", 7, "#3b2f2f", "🎬"),
-            ("Architecture", 8, "#555555", "🏛️"),
-            ("Mythologie", 9, "#8b4513", "⚡"),
-            ("Gastronomie", 10, "#6b2737", "🍷")
+        # Nouvel Ordre Demandé
+        blocks = [
+            ("Poésie", "#c5a059", "📜"),
+            ("Littérature", "#800020", "📚"),
+            ("Musique", "#2b2b2b", "🎵"),
+            ("Sciences", "#4a6b5d", "🌍"),
+            ("Philosophie", "#800020", "🧠"),
+            ("Cinéma", "#1a1a1a", "🎬"),
+            ("Architecture", "#555555", "🏛️"),
+            ("Mythologie", "#c5a059", "⚡"),
+            ("Gastronomie", "#800020", "🍷")
         ]
         
-        # Génération avec protection anti-doublon
-        generated_data = {}
-        for name, offset, _, _ in blocks_config:
-            data = get_content_item(name, date_str, offset, ", ".join(used_titles))
-            generated_data[name] = data
-            if not data.get("erreur"):
-                used_titles.append(data.get("titre", ""))
-                # On ajoute aussi l'auteur pour éviter qu'il propose Rimbaud en poésie ET en littérature
-                author_field = data.get("auteur") or data.get("artiste") or data.get("realisateur") or data.get("philosophe")
-                if author_field: used_titles.append(author_field)
-
-        # Affichage
         if not quote.get("erreur"):
-            st.markdown(f"<div class='quote-box'>« {quote.get('citation')} »<br><small>— {quote.get('auteur')}</small></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='quote-box'>« {quote.get('citation')} »<br><br><small>— {quote.get('auteur')}</small></div>", unsafe_allow_html=True)
             
         render_block_safe("🖼️", "Beaux-Arts", art, date_str, context_id, color="#800020")
             
-        for name, _, color, icon in blocks_config:
-            render_block_safe(icon, name, generated_data[name], date_str, context_id, color)
+        for name, color, icon in blocks:
+            data = get_content_item(name, date_str)
+            render_block_safe(icon, name, data, date_str, context_id, color)
 
 # --- APP PRINCIPALE ---
 st.title("Le Banquet des Muses")
