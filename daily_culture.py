@@ -50,22 +50,21 @@ st.markdown("""
         font-family: 'Cinzel', serif; font-weight: 600; letter-spacing: 1px;
     }
     
-    /* CORRECTION CRITIQUE DU BOUTON LIEN (Approfondir/Ecouter) */
     [data-testid="stLinkButton"] a {
-        background-color: #111827 !important; /* Fond très sombre */
+        background-color: #111827 !important;
         border: 1px solid #800020 !important;
         border-radius: 4px !important;
         text-decoration: none !important;
     }
     [data-testid="stLinkButton"] a p {
-        color: #fdfbf7 !important; /* TEXTE CLAIR OBLIGATOIRE SUR FOND SOMBRE */
+        color: #fdfbf7 !important;
         font-family: 'Cinzel', serif !important;
         font-weight: 600 !important;
         letter-spacing: 1px !important;
         margin: 0 !important;
     }
     [data-testid="stLinkButton"] a:hover {
-        background-color: #800020 !important; /* Rouge Romain au survol */
+        background-color: #800020 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -76,7 +75,7 @@ if not DEEPSEEK_KEY:
     st.error("❌ CLÉ API MANQUANTE : Ajoutez 'DEEPSEEK_API_KEY' dans les Secrets.")
     st.stop()
 
-# --- GESTION DES FAVORIS ET DE L'HISTORIQUE (MÉMOIRE ANTI-RÉPÉTITION) ---
+# --- GESTION DES FAVORIS ET HISTORIQUE ---
 PREFS_FILE = Path("mes_favoris.json")
 HISTORY_FILE = Path("seen_history.json")
 
@@ -100,7 +99,6 @@ def save_pref(category, title, author, is_liked, date_str):
     if is_liked: st.toast("Ajouté aux favoris ! ⭐")
 
 def load_history():
-    """Charge l'historique des œuvres déjà générées pour éviter les doublons."""
     if HISTORY_FILE.exists():
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
@@ -108,13 +106,12 @@ def load_history():
     return {}
 
 def save_to_history(category, title):
-    """Enregistre le titre d'une œuvre pour ne plus la reproposer (limité aux 30 dernières)."""
     if not title or title == "Inconnu": return
     history = load_history()
     if category not in history: history[category] = []
     if title not in history[category]:
         history[category].append(title)
-        history[category] = history[category][-30:] # On garde les 30 dernières en mémoire
+        history[category] = history[category][-30:] 
         with open(HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(history, f, ensure_ascii=False, indent=4)
 
 # --- FONCTIONS HELPERS ---
@@ -124,11 +121,11 @@ def extract_json(text):
         if match: return json.loads(match.group(0))
         return json.loads(text)
     except Exception as e:
-        raise ValueError(f"Impossible de parser le JSON: {str(e)}")
+        raise ValueError("JSON Error")
 
 def get_wiki_image(query, lang="fr"):
     if not query: return None
-    headers = {"User-Agent": "Banquet_Des_Muses_App/4.2 (contact@example.com)"}
+    headers = {"User-Agent": "Banquet_Des_Muses_App/5.0"}
     try:
         search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(str(query))}&utf8=&format=json&srlimit=1"
         res = requests.get(search_url, headers=headers, timeout=8).json()
@@ -138,14 +135,10 @@ def get_wiki_image(query, lang="fr"):
         summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(page_title.replace(' ', '_'))}"
         res2 = requests.get(summary_url, headers=headers, timeout=8).json()
         
-        url = None
-        if 'originalimage' in res2: url = res2['originalimage']['source']
-        elif 'thumbnail' in res2: url = res2['thumbnail']['source']
-            
+        url = res2.get('originalimage', {}).get('source') or res2.get('thumbnail', {}).get('source')
         if url and url.startswith("//"): url = "https:" + url
         return url
-    except: pass
-    return None
+    except: return None
 
 def fetch_image_cascade(res_dict, category):
     primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture", "Littérature", "Jeu vidéo", "Photographie"] else "fr"
@@ -157,42 +150,22 @@ def fetch_image_cascade(res_dict, category):
     ]
     queries = [str(q) for q in queries if q and len(str(q)) > 2]
 
-    # 1. Wikipédia
     for q in queries:
         img = get_wiki_image(q, primary_lang)
         if img: return img
         img = get_wiki_image(q, "fr" if primary_lang == "en" else "en")
         if img: return img
         
-    # 2. IA Pollinations (Fallback)
     if queries:
         clean_query = re.sub(r'[^a-zA-Z0-9\s]', ' ', str(queries[0])).strip()
-        ai_prompt = f"Cinematic elegant high quality photography of {clean_query} for a {category} magazine"
-        safe_prompt = urllib.parse.quote(ai_prompt)
+        safe_prompt = urllib.parse.quote(f"Cinematic elegant high quality photography of {clean_query} for a {category} magazine")
         return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=500&nologo=true"
     return None
 
+# --- APPELS API ROBUSTES (CACHÉS INDIVIDUELLEMENT) ---
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def ask_deepseek(prompt, date_str):
-    url = "https://api.deepseek.com/chat/completions"
-    headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "Tu es un érudit classique. Analyses profondes (10 phrases). Pour la poésie, donne TOUJOURS le poème en ENTIER. Réponds STRICTEMENT en JSON pur."},
-            {"role": "user", "content": prompt}
-        ],
-        "response_format": {"type": "json_object"}
-    }
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        return extract_json(response.json()["choices"][0]["message"]["content"])
-    except Exception as e:
-        return {"erreur": True}
-
-# --- FONCTIONS DE CONTENU ---
-@st.cache_data(show_spinner=False, ttl=86400*30)
-def get_content_item(category_name, date_str):
+def fetch_category_data(category_name, date_str):
+    """Fonction isolée et cachée pour garantir la stabilité même lors de rafraîchissements (ex: clics sur boutons)"""
     prompts = {
         "Poésie": "{'titre': '...', 'auteur': '...', 'poeme_entier': 'Le texte INTÉGRAL du poème', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
         "Littérature": "{'titre': '...', 'auteur': '...', 'extrait': 'Extrait de roman/essai...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Livre ou Auteur'}",
@@ -209,33 +182,74 @@ def get_content_item(category_name, date_str):
         "Bande dessinée": "{'titre': '...', 'auteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Série BD'}",
         "Jeu vidéo": "{'titre': '...', 'studio': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du jeu vidéo'}"
     }
-    
-    # INJECTION DE L'HISTORIQUE (Anti-Répétition)
+
     history = load_history().get(category_name, [])
-    avoid_clause = ""
-    if history:
-        avoid_clause = f" INTERDICTION ABSOLUE de proposer ces œuvres (tu en as déjà parlé) : {', '.join(history)}."
-        
-    prompt_complet = f"Édition du {date_str}. Propose une NOUVELLE œuvre pour : {category_name}.{avoid_clause} Format strictement respecté : {prompts[category_name]}"
+    avoid_clause = f" INTERDICTION ABSOLUE de proposer ces œuvres : {', '.join(history)}." if history else ""
+    prompt = f"Édition du {date_str}. Propose une NOUVELLE œuvre pour : {category_name}.{avoid_clause} Format strict : {prompts[category_name]}"
     
-    res = ask_deepseek(prompt_complet, f"{date_str}_{category_name}")
-    if not res.get("erreur"):
-        res["image"] = fetch_image_cascade(res, category_name)
-        # Sauvegarde du titre généré dans la mémoire de l'app
-        titre_oeuvre = res.get("titre") or res.get("concept")
-        save_to_history(category_name, titre_oeuvre)
-        
-    return res
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "Tu es un érudit classique. Analyses profondes (10 phrases). Pour la poésie, donne TOUJOURS le poème en ENTIER. Réponds STRICTEMENT en JSON pur."},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"}
+    }
+    
+    for _ in range(3):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            data = extract_json(response.json()["choices"][0]["message"]["content"])
+            data["image"] = fetch_image_cascade(data, category_name)
+            titre = data.get("titre") or data.get("concept")
+            if titre: save_to_history(category_name, titre)
+            return data
+        except Exception:
+            time.sleep(2)
+            
+    raise Exception("API Timeout")
+
+def get_content_item(category_name, date_str):
+    try: return fetch_category_data(category_name, date_str)
+    except Exception: return {"erreur": True}
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def get_art_safe(date_str):
+def fetch_art_data(date_str):
     random.seed(int(date_str.replace("-", "")))
     ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529, 437112, 436121, 459123]
-    try:
-        r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=15).json()
-        ds = ask_deepseek(f"Analyse de '{r.get('title')}' par {r.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}", date_str)
-        return {"titre": ds.get('titre_fr', r.get('title')), "auteur": r.get('artistDisplayName'), "image": r.get('primaryImageSmall'), "analyse": ds.get('analyse'), "lien_wiki": ds.get('lien_wiki') or r.get('objectURL')}
-    except: return {"erreur": True}
+    for _ in range(3):
+        try:
+            r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=15).json()
+            prompt = f"Analyse de '{r.get('title')}' par {r.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}"
+            url = "https://api.deepseek.com/chat/completions"
+            headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
+            response = requests.post(url, headers=headers, json={"model": "deepseek-chat", "messages": [{"role": "system", "content": "Réponds STRICTEMENT en JSON pur."}, {"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}, timeout=60)
+            ds = extract_json(response.json()["choices"][0]["message"]["content"])
+            return {"titre": ds.get('titre_fr', r.get('title')), "auteur": r.get('artistDisplayName'), "image": r.get('primaryImageSmall'), "analyse": ds.get('analyse'), "lien_wiki": ds.get('lien_wiki') or r.get('objectURL')}
+        except Exception: time.sleep(2)
+    raise Exception("Art API Error")
+
+def get_art_safe(date_str):
+    try: return fetch_art_data(date_str)
+    except Exception: return {"erreur": True}
+
+@st.cache_data(show_spinner=False, ttl=86400*30)
+def fetch_quote_data(date_str):
+    prompt = f"Citation antique ou classique pour le {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}"
+    headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
+    for _ in range(3):
+        try:
+            response = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json={"model": "deepseek-chat", "messages": [{"role": "system", "content": "JSON pur."}, {"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}, timeout=30)
+            return extract_json(response.json()["choices"][0]["message"]["content"])
+        except Exception: time.sleep(2)
+    raise Exception("Quote Error")
+
+def get_quote_safe(date_str):
+    try: return fetch_quote_data(date_str)
+    except Exception: return {"erreur": True}
 
 # --- AFFICHAGE ---
 def render_block_safe(icon, label, data, date_str, context_id, color="#c5a059"):
@@ -274,11 +288,9 @@ def render_block_safe(icon, label, data, date_str, context_id, color="#c5a059"):
             if label == "Musique":
                 btn_label = "🎧 Écouter (YouTube Music)"
                 query = urllib.parse.quote(f"{auteur} {titre}")
-                # Lien HTTPS classique pur, mieux supporté par Brave et l'OS Android pour les App Links
                 wiki = f"https://music.youtube.com/search?q={query}"
             else:
                 btn_label = "📖 Approfondir"
-                
             st.link_button(btn_label, wiki, use_container_width=True)
 
 def display_exposition(target_date, context_id):
@@ -286,25 +298,15 @@ def display_exposition(target_date, context_id):
     st.markdown(f"<p style='text-align: center; color: #555; font-size: 1.4rem; font-style: italic;'>Édition du {target_date.strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
 
     with st.spinner("Les Muses préparent le banquet..."):
-        quote = ask_deepseek(f"Citation antique ou classique pour le {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
+        quote = get_quote_safe(date_str)
         art = get_art_safe(date_str)
         
-        # Nouvel Ordre Demandé avec l'ajout des nouveaux arts
         blocks = [
-            ("Poésie", "#c5a059", "📜"),
-            ("Littérature", "#800020", "📚"),
-            ("Musique", "#2b2b2b", "🎵"),
-            ("Sciences", "#4a6b5d", "🌍"),
-            ("Philosophie", "#800020", "🧠"),
-            ("Cinéma", "#1a1a1a", "🎬"),
-            ("Architecture", "#555555", "🏛️"),
-            ("Mythologie", "#c5a059", "⚡"),
-            ("Gastronomie", "#800020", "🍷"),
-            ("Sculpture", "#696969", "🗿"),
-            ("Arts de la scène", "#8B0000", "🎭"),
-            ("Photographie", "#2F4F4F", "📷"),
-            ("Bande dessinée", "#B8860B", "🖋️"),
-            ("Jeu vidéo", "#2E8B57", "🎮")
+            ("Poésie", "#c5a059", "📜"), ("Littérature", "#800020", "📚"), ("Musique", "#2b2b2b", "🎵"),
+            ("Sciences", "#4a6b5d", "🌍"), ("Philosophie", "#800020", "🧠"), ("Cinéma", "#1a1a1a", "🎬"),
+            ("Architecture", "#555555", "🏛️"), ("Mythologie", "#c5a059", "⚡"), ("Gastronomie", "#800020", "🍷"),
+            ("Sculpture", "#696969", "🗿"), ("Arts de la scène", "#8B0000", "🎭"), ("Photographie", "#2F4F4F", "📷"),
+            ("Bande dessinée", "#B8860B", "🖋️"), ("Jeu vidéo", "#2E8B57", "🎮")
         ]
         
         if not quote.get("erreur"):
@@ -321,12 +323,23 @@ st.title("Le Banquet des Muses")
 t1, t2, t3 = st.tabs(["✨ Aujourd'hui", "📅 Archives", "⭐ Favoris"])
 
 with t1: display_exposition(datetime.date.today(), context_id="today")
+
 with t2:
-    d = st.date_input("Date :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
-    if d != datetime.date.today(): display_exposition(d, context_id="archive")
+    d = st.date_input("Date des archives :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
+    if st.button("🏛️ Explorer cette date passée", key="btn_load_archive", use_container_width=True):
+        st.session_state["archive_date"] = d
+        
+    if "archive_date" in st.session_state:
+        display_exposition(st.session_state["archive_date"], context_id="archive")
+    else:
+        st.info("Sélectionnez une date puis cliquez sur le bouton pour raviver le banquet de ce jour.")
+
 with t3:
     prefs = [p for p in load_prefs() if p.get("liked")]
-    if not prefs: st.info("Aucun favori pour le moment.")
+    if not prefs: 
+        st.info("Aucun favori pour le moment. Allez donner un 👍 à vos œuvres préférées !")
     else:
         for p in sorted(prefs, key=lambda x: x.get('date', ''), reverse=True):
-            st.markdown(f"**{p.get('category')}** : {p.get('title')} *({p.get('author')})* — {p.get('date')}")
+            with st.container(border=True):
+                st.markdown(f"**{p.get('category')}** : {p.get('title')} *({p.get('author')})*")
+                st.caption(f"Sauvegardé le {p.get('date')}")
