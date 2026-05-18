@@ -70,49 +70,91 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- SECURITÉ & CLÉS API ---
-DEEPSEEK_KEY = st.secrets.get("DEEPSEEK_API_KEY")
-if not DEEPSEEK_KEY:
+def has_secret(key):
+    try: return key in st.secrets
+    except: return False
+
+if not has_secret("DEEPSEEK_API_KEY"):
     st.error("❌ CLÉ API MANQUANTE : Ajoutez 'DEEPSEEK_API_KEY' dans les Secrets.")
     st.stop()
+DEEPSEEK_KEY = st.secrets["DEEPSEEK_API_KEY"]
 
-# --- GESTION DES FAVORIS ET HISTORIQUE ---
-PREFS_FILE = Path("mes_favoris.json")
-HISTORY_FILE = Path("seen_history.json")
+# --- CLOUD STORAGE MANAGER (JSONBin.io) ---
+class StorageManager:
+    def __init__(self):
+        self.use_cloud = has_secret("JSONBIN_MASTER_KEY") and has_secret("JSONBIN_BIN_ID")
+        
+        if self.use_cloud:
+            self.headers = {"X-Master-Key": st.secrets["JSONBIN_MASTER_KEY"], "Content-Type": "application/json"}
+            self.bin_url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_BIN_ID']}"
+        else:
+            self.local_prefs = Path("mes_favoris.json")
+            self.local_history = Path("seen_history.json")
+
+    def get_data(self):
+        if self.use_cloud:
+            return self._fetch_cloud()
+        else:
+            p = json.loads(self.local_prefs.read_text(encoding="utf-8")) if self.local_prefs.exists() else []
+            h = json.loads(self.local_history.read_text(encoding="utf-8")) if self.local_history.exists() else {}
+            return {"prefs": p, "history": h}
+
+    @staticmethod
+    @st.cache_data(show_spinner=False, ttl=3600) # Cache 1 heure pour ne pas spammer l'API
+    def _fetch_cloud():
+        url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_BIN_ID']}/latest"
+        headers = {"X-Master-Key": st.secrets["JSONBIN_MASTER_KEY"]}
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                return res.json().get("record", {"prefs": [], "history": {}})
+        except: pass
+        return {"prefs": [], "history": {}}
+
+    def save_data(self, data):
+        if self.use_cloud:
+            try:
+                requests.put(self.bin_url, headers=self.headers, json=data, timeout=10)
+                self._fetch_cloud.clear() # On vide le cache Streamlit pour forcer le rafraîchissement au prochain get_data()
+            except: pass
+        else:
+            self.local_prefs.write_text(json.dumps(data.get("prefs", []), ensure_ascii=False, indent=4), encoding="utf-8")
+            self.local_history.write_text(json.dumps(data.get("history", {}), ensure_ascii=False, indent=4), encoding="utf-8")
+
+# Initialisation Globale du Manager
+storage = StorageManager()
 
 def load_prefs():
-    if PREFS_FILE.exists():
-        try:
-            with open(PREFS_FILE, "r", encoding="utf-8") as f: return json.load(f)
-        except: return []
-    return []
+    return storage.get_data().get("prefs", [])
 
 def save_pref(category, title, author, is_liked, date_str):
-    prefs = load_prefs()
+    data = storage.get_data()
+    prefs = data.setdefault("prefs", [])
+    
     for p in prefs:
         if p.get("category") == category and p.get("title") == title:
             p["liked"] = is_liked
-            with open(PREFS_FILE, "w", encoding="utf-8") as f: json.dump(prefs, f, ensure_ascii=False, indent=4)
+            storage.save_data(data)
             st.toast("Préférence mise à jour ! ✨")
             return
+            
     prefs.append({"date": date_str, "category": category, "title": title, "author": author, "liked": is_liked})
-    with open(PREFS_FILE, "w", encoding="utf-8") as f: json.dump(prefs, f, ensure_ascii=False, indent=4)
+    storage.save_data(data)
     if is_liked: st.toast("Ajouté aux favoris ! ⭐")
 
 def load_history():
-    if HISTORY_FILE.exists():
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
-        except: return {}
-    return {}
+    return storage.get_data().get("history", {})
 
 def save_to_history(category, title):
     if not title or title == "Inconnu": return
-    history = load_history()
+    data = storage.get_data()
+    history = data.setdefault("history", {})
+    
     if category not in history: history[category] = []
     if title not in history[category]:
         history[category].append(title)
         history[category] = history[category][-30:] 
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(history, f, ensure_ascii=False, indent=4)
+        storage.save_data(data)
 
 # --- FONCTIONS HELPERS ---
 def extract_json(text):
@@ -162,10 +204,49 @@ def fetch_image_cascade(res_dict, category):
         return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=500&nologo=true"
     return None
 
-# --- APPELS API ROBUSTES (CACHÉS INDIVIDUELLEMENT) ---
+def get_daily_focus(category_name, date_str):
+    seed_val = int(date_str.replace("-", ""))
+    rng = random.Random(seed_val)
+    foci = {
+        "Poésie": ["le Romantisme", "le Symbolisme", "le Surréalisme", "la poésie du 20ème siècle", "le Parnasse", "la Renaissance (Pléiade)", "un poème mélancolique", "un sonnet classique", "l'amour", "la nature"],
+        "Littérature": ["un roman du 19e siècle", "une pièce de théâtre antique", "un essai philosophique", "un conte philosophique", "un roman d'anticipation", "le réalisme", "le naturalisme", "un chef-d'oeuvre du 20e siècle", "un lauréat du prix Nobel", "la littérature classique"],
+        "Musique": ["le rock des années 70", "le jazz classique", "la musique classique (symphonie)", "la pop des années 80", "la soul ou le R&B", "le hip-hop", "la chanson française", "le blues", "le piano solo", "l'opéra"],
+        "Sciences": ["la physique quantique", "la biologie", "l'astronomie", "la chimie", "l'informatique", "les mathématiques", "la médecine", "la révolution industrielle", "l'antiquité scientifique", "la thermodynamique"],
+        "Philosophie": ["l'existentialisme", "le stoïcisme", "la philosophie des Lumières", "la Grèce antique", "le rationalisme", "l'empirisme", "la phénoménologie", "le nihilisme", "la philosophie politique", "la métaphysique"],
+        "Cinéma": ["le Nouvel Hollywood", "la Nouvelle Vague", "l'expressionnisme", "le néoréalisme italien", "la science-fiction", "le film noir", "les années 50", "l'animation japonaise", "le thriller", "le drame historique"],
+        "Architecture": ["le gothique", "le style roman", "la Renaissance", "l'art déco", "le brutalisme", "l'Antiquité", "le modernisme", "l'architecture asiatique", "les gratte-ciels", "le baroque"],
+        "Mythologie": ["la mythologie nordique", "la mythologie grecque", "la mythologie égyptienne", "la mythologie romaine", "les mythes celtiques", "les légendes asiatiques", "la Mésopotamie", "les héros", "les créatures mythologiques", "la création du monde"],
+        "Gastronomie": ["un plat français", "la gastronomie italienne", "une spécialité japonaise", "un dessert classique", "un plat épicé", "les fromages et vins", "la cuisine levantine", "les techniques culinaires", "la cuisine mexicaine", "la Méditerranée"],
+        "Sculpture": ["la Renaissance", "la Grèce antique", "la sculpture moderne", "l'art roman", "le monumental", "les bustes romains", "le marbre", "le bronze", "l'art abstrait", "le néoclassicisme"],
+        "Arts de la scène": ["la tragédie grecque", "le ballet classique", "Molière", "Shakespeare", "l'opéra italien", "le théâtre de l'absurde", "la comédie musicale", "le théâtre du 20e siècle", "le kabuki", "la danse contemporaine"],
+        "Photographie": ["la photographie humaniste", "le photojournalisme", "le paysage", "le portrait", "la photographie de rue", "le surréalisme", "le pictorialisme", "la guerre", "le noir et blanc", "la mode"],
+        "Bande dessinée": ["la BD franco-belge", "le roman graphique", "le manga classique", "le comic book", "la ligne claire", "la science-fiction", "la BD historique", "les pionniers du 9e art", "les auteurs européens", "le manga seinen"],
+        "Jeu vidéo": ["l'ère 16-bits", "les RPG classiques", "les jeux narratifs", "les pionniers", "les jeux indépendants", "les jeux de plateforme", "la stratégie", "la 3D naissante", "le point & click", "l'aventure épique"]
+    }
+    return rng.choice(foci.get(category_name, ["une œuvre incontournable"]))
+
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def fetch_category_data(category_name, date_str):
-    """Fonction isolée et cachée pour garantir la stabilité même lors de rafraîchissements (ex: clics sur boutons)"""
+def ask_deepseek(prompt, date_str):
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "Tu es un érudit classique. Analyses profondes (10 phrases). Pour la poésie, donne TOUJOURS le poème en ENTIER. Réponds STRICTEMENT en JSON pur."},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        return extract_json(response.json()["choices"][0]["message"]["content"])
+    except Exception as e:
+        return {"erreur": True}
+
+# --- FONCTIONS DE CONTENU ---
+@st.cache_data(show_spinner=False, ttl=86400*30)
+def get_content_item(category_name, date_str):
     prompts = {
         "Poésie": "{'titre': '...', 'auteur': '...', 'poeme_entier': 'Le texte INTÉGRAL du poème', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
         "Littérature": "{'titre': '...', 'auteur': '...', 'extrait': 'Extrait de roman/essai...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Livre ou Auteur'}",
@@ -182,74 +263,30 @@ def fetch_category_data(category_name, date_str):
         "Bande dessinée": "{'titre': '...', 'auteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Série BD'}",
         "Jeu vidéo": "{'titre': '...', 'studio': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du jeu vidéo'}"
     }
-
+    
+    focus = get_daily_focus(category_name, date_str)
     history = load_history().get(category_name, [])
-    avoid_clause = f" INTERDICTION ABSOLUE de proposer ces œuvres : {', '.join(history)}." if history else ""
-    prompt = f"Édition du {date_str}. Propose une NOUVELLE œuvre pour : {category_name}.{avoid_clause} Format strict : {prompts[category_name]}"
+    avoid_clause = f" INTERDICTION ABSOLUE de proposer ces œuvres (déjà vues) : {', '.join(history)}." if history else ""
+        
+    prompt_complet = f"Édition du {date_str}. Propose une NOUVELLE œuvre pour : {category_name}. Thème du jour imposé : {focus}.{avoid_clause} Format strictement respecté : {prompts[category_name]}"
     
-    url = "https://api.deepseek.com/chat/completions"
-    headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "Tu es un érudit classique. Analyses profondes (10 phrases). Pour la poésie, donne TOUJOURS le poème en ENTIER. Réponds STRICTEMENT en JSON pur."},
-            {"role": "user", "content": prompt}
-        ],
-        "response_format": {"type": "json_object"}
-    }
-    
-    for _ in range(3):
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-            data = extract_json(response.json()["choices"][0]["message"]["content"])
-            data["image"] = fetch_image_cascade(data, category_name)
-            titre = data.get("titre") or data.get("concept")
-            if titre: save_to_history(category_name, titre)
-            return data
-        except Exception:
-            time.sleep(2)
-            
-    raise Exception("API Timeout")
-
-def get_content_item(category_name, date_str):
-    try: return fetch_category_data(category_name, date_str)
-    except Exception: return {"erreur": True}
+    res = ask_deepseek(prompt_complet, f"{date_str}_{category_name}")
+    if not res.get("erreur"):
+        res["image"] = fetch_image_cascade(res, category_name)
+        titre_oeuvre = res.get("titre") or res.get("concept")
+        save_to_history(category_name, titre_oeuvre)
+        
+    return res
 
 @st.cache_data(show_spinner=False, ttl=86400*30)
-def fetch_art_data(date_str):
+def get_art_safe(date_str):
     random.seed(int(date_str.replace("-", "")))
     ids = [436535, 436528, 436532, 435882, 435809, 436533, 436529, 437112, 436121, 459123]
-    for _ in range(3):
-        try:
-            r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=15).json()
-            prompt = f"Analyse de '{r.get('title')}' par {r.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}"
-            url = "https://api.deepseek.com/chat/completions"
-            headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
-            response = requests.post(url, headers=headers, json={"model": "deepseek-chat", "messages": [{"role": "system", "content": "Réponds STRICTEMENT en JSON pur."}, {"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}, timeout=60)
-            ds = extract_json(response.json()["choices"][0]["message"]["content"])
-            return {"titre": ds.get('titre_fr', r.get('title')), "auteur": r.get('artistDisplayName'), "image": r.get('primaryImageSmall'), "analyse": ds.get('analyse'), "lien_wiki": ds.get('lien_wiki') or r.get('objectURL')}
-        except Exception: time.sleep(2)
-    raise Exception("Art API Error")
-
-def get_art_safe(date_str):
-    try: return fetch_art_data(date_str)
-    except Exception: return {"erreur": True}
-
-@st.cache_data(show_spinner=False, ttl=86400*30)
-def fetch_quote_data(date_str):
-    prompt = f"Citation antique ou classique pour le {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}"
-    headers = {"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"}
-    for _ in range(3):
-        try:
-            response = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json={"model": "deepseek-chat", "messages": [{"role": "system", "content": "JSON pur."}, {"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}, timeout=30)
-            return extract_json(response.json()["choices"][0]["message"]["content"])
-        except Exception: time.sleep(2)
-    raise Exception("Quote Error")
-
-def get_quote_safe(date_str):
-    try: return fetch_quote_data(date_str)
-    except Exception: return {"erreur": True}
+    try:
+        r = requests.get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{random.choice(ids)}", timeout=15).json()
+        ds = ask_deepseek(f"Analyse de '{r.get('title')}' par {r.get('artistDisplayName')}. JSON: {{'titre_fr': '...', 'analyse': '...', 'lien_wiki': '...'}}", date_str)
+        return {"titre": ds.get('titre_fr', r.get('title')), "auteur": r.get('artistDisplayName'), "image": r.get('primaryImageSmall'), "analyse": ds.get('analyse'), "lien_wiki": ds.get('lien_wiki') or r.get('objectURL')}
+    except: return {"erreur": True}
 
 # --- AFFICHAGE ---
 def render_block_safe(icon, label, data, date_str, context_id, color="#c5a059"):
@@ -298,7 +335,7 @@ def display_exposition(target_date, context_id):
     st.markdown(f"<p style='text-align: center; color: #555; font-size: 1.4rem; font-style: italic;'>Édition du {target_date.strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
 
     with st.spinner("Les Muses préparent le banquet..."):
-        quote = get_quote_safe(date_str)
+        quote = ask_deepseek(f"Citation antique ou classique pour le {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
         art = get_art_safe(date_str)
         
         blocks = [
@@ -325,19 +362,16 @@ t1, t2, t3 = st.tabs(["✨ Aujourd'hui", "📅 Archives", "⭐ Favoris"])
 with t1: display_exposition(datetime.date.today(), context_id="today")
 
 with t2:
-    d = st.date_input("Date des archives :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
-    if st.button("🏛️ Explorer cette date passée", key="btn_load_archive", use_container_width=True):
-        st.session_state["archive_date"] = d
-        
-    if "archive_date" in st.session_state:
-        display_exposition(st.session_state["archive_date"], context_id="archive")
-    else:
-        st.info("Sélectionnez une date puis cliquez sur le bouton pour raviver le banquet de ce jour.")
-
+    d = st.date_input("Date :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
+    if d != datetime.date.today(): display_exposition(d, context_id="archive")
 with t3:
+    if storage.use_cloud:
+        st.success("☁️ Sauvegarde Cloud activée. Vos favoris et votre historique sont protégés à vie !")
+    else:
+        st.warning("⚠️ **Mode Local** : L'hébergement gratuit efface la mémoire chaque nuit. Pour une sauvegarde à vie, ajoutez des clés JSONBin.io dans vos Secrets Streamlit.")
+    
     prefs = [p for p in load_prefs() if p.get("liked")]
-    if not prefs: 
-        st.info("Aucun favori pour le moment. Allez donner un 👍 à vos œuvres préférées !")
+    if not prefs: st.info("Aucun favori pour le moment. Allez donner un 👍 à vos œuvres préférées !")
     else:
         for p in sorted(prefs, key=lambda x: x.get('date', ''), reverse=True):
             with st.container(border=True):
