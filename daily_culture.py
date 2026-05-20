@@ -92,22 +92,20 @@ class StorageManager:
             self.local_history = Path("seen_history.json")
 
     def get_data(self):
-        if self.use_cloud:
-            return self._fetch_cloud()
+        if self.use_cloud: return self._fetch_cloud()
         else:
             p = json.loads(self.local_prefs.read_text(encoding="utf-8")) if self.local_prefs.exists() else []
             h = json.loads(self.local_history.read_text(encoding="utf-8")) if self.local_history.exists() else {}
             return {"prefs": p, "history": h}
 
     @staticmethod
-    @st.cache_data(show_spinner=False, ttl=3600) # Cache 1 heure pour ne pas spammer l'API
+    @st.cache_data(show_spinner=False, ttl=3600)
     def _fetch_cloud():
         url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_BIN_ID']}/latest"
         headers = {"X-Master-Key": st.secrets["JSONBIN_MASTER_KEY"]}
         try:
             res = requests.get(url, headers=headers, timeout=10)
-            if res.status_code == 200:
-                return res.json().get("record", {"prefs": [], "history": {}})
+            if res.status_code == 200: return res.json().get("record", {"prefs": [], "history": {}})
         except: pass
         return {"prefs": [], "history": {}}
 
@@ -115,13 +113,12 @@ class StorageManager:
         if self.use_cloud:
             try:
                 requests.put(self.bin_url, headers=self.headers, json=data, timeout=10)
-                self._fetch_cloud.clear() # On vide le cache Streamlit pour forcer le rafraîchissement au prochain get_data()
+                self._fetch_cloud.clear()
             except: pass
         else:
             self.local_prefs.write_text(json.dumps(data.get("prefs", []), ensure_ascii=False, indent=4), encoding="utf-8")
             self.local_history.write_text(json.dumps(data.get("history", {}), ensure_ascii=False, indent=4), encoding="utf-8")
 
-# Initialisation Globale du Manager
 storage = StorageManager()
 
 def load_prefs():
@@ -153,7 +150,7 @@ def save_to_history(category, title):
     if category not in history: history[category] = []
     if title not in history[category]:
         history[category].append(title)
-        history[category] = history[category][-30:] 
+        history[category] = history[category][-40:] 
         storage.save_data(data)
 
 # --- FONCTIONS HELPERS ---
@@ -162,12 +159,12 @@ def extract_json(text):
         match = re.search(r'\{.*\}', text.strip(), re.DOTALL)
         if match: return json.loads(match.group(0))
         return json.loads(text)
-    except Exception as e:
+    except Exception:
         raise ValueError("JSON Error")
 
 def get_wiki_image(query, lang="fr"):
     if not query: return None
-    headers = {"User-Agent": "Banquet_Des_Muses_App/5.0"}
+    headers = {"User-Agent": "Banquet_Des_Muses_App/6.0"}
     try:
         search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(str(query))}&utf8=&format=json&srlimit=1"
         res = requests.get(search_url, headers=headers, timeout=8).json()
@@ -183,24 +180,37 @@ def get_wiki_image(query, lang="fr"):
     except: return None
 
 def fetch_image_cascade(res_dict, category):
-    primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture", "Littérature", "Jeu vidéo", "Photographie"] else "fr"
+    primary_lang = "en" if category in ["Cinéma", "Musique", "Architecture", "Littérature", "Jeu vidéo", "Photographie", "Sculpture"] else "fr"
+    
+    titre = res_dict.get("titre", "")
+    auteur = res_dict.get("auteur") or res_dict.get("artiste") or res_dict.get("sculpteur") or res_dict.get("realisateur") or ""
+    
+    # Recherches plus agressives sur Wikipédia
     queries = [
-        res_dict.get("image_query"), res_dict.get("titre"), res_dict.get("artiste"),
-        res_dict.get("auteur"), res_dict.get("realisateur"), res_dict.get("philosophe"),
-        res_dict.get("inventeur"), res_dict.get("concept"), res_dict.get("sculpteur"),
-        res_dict.get("photographe"), res_dict.get("studio")
+        res_dict.get("image_query"), 
+        f"{titre} {auteur}".strip(),
+        titre
     ]
     queries = [str(q) for q in queries if q and len(str(q)) > 2]
 
+    # 1. Wikipédia
     for q in queries:
         img = get_wiki_image(q, primary_lang)
         if img: return img
         img = get_wiki_image(q, "fr" if primary_lang == "en" else "en")
         if img: return img
         
+    # 2. RÈGLE STRICTE : Si Architecture ou Sculpture, ON VEUT UNE VRAIE PHOTO. 
+    # Pas d'hallucination IA. On retourne None (pas d'image affichée).
+    if category in ["Architecture", "Sculpture", "Beaux-Arts"]:
+        return None
+        
+    # 3. IA Pollinations (Fallback amélioré pour la pertinence)
     if queries:
-        clean_query = re.sub(r'[^a-zA-Z0-9\s]', ' ', str(queries[0])).strip()
-        safe_prompt = urllib.parse.quote(f"Cinematic elegant high quality photography of {clean_query} for a {category} magazine")
+        clean_query = re.sub(r'[^a-zA-Z0-9\s]', ' ', f"{titre} {auteur}").strip()
+        if not clean_query: clean_query = str(queries[0])
+        ai_prompt = f"Masterpiece elegant illustration of {clean_query}, {category} concept, highly detailed"
+        safe_prompt = urllib.parse.quote(ai_prompt)
         return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=500&nologo=true"
     return None
 
@@ -208,20 +218,20 @@ def get_daily_focus(category_name, date_str):
     seed_val = int(date_str.replace("-", ""))
     rng = random.Random(seed_val)
     foci = {
-        "Poésie": ["le Romantisme", "le Symbolisme", "le Surréalisme", "la poésie du 20ème siècle", "le Parnasse", "la Renaissance (Pléiade)", "un poème mélancolique", "un sonnet classique", "l'amour", "la nature"],
-        "Littérature": ["un roman du 19e siècle", "une pièce de théâtre antique", "un essai philosophique", "un conte philosophique", "un roman d'anticipation", "le réalisme", "le naturalisme", "un chef-d'oeuvre du 20e siècle", "un lauréat du prix Nobel", "la littérature classique"],
-        "Musique": ["le rock des années 70", "le jazz classique", "la musique classique (symphonie)", "la pop des années 80", "la soul ou le R&B", "le hip-hop", "la chanson française", "le blues", "le piano solo", "l'opéra"],
-        "Sciences": ["la physique quantique", "la biologie", "l'astronomie", "la chimie", "l'informatique", "les mathématiques", "la médecine", "la révolution industrielle", "l'antiquité scientifique", "la thermodynamique"],
-        "Philosophie": ["l'existentialisme", "le stoïcisme", "la philosophie des Lumières", "la Grèce antique", "le rationalisme", "l'empirisme", "la phénoménologie", "le nihilisme", "la philosophie politique", "la métaphysique"],
-        "Cinéma": ["le Nouvel Hollywood", "la Nouvelle Vague", "l'expressionnisme", "le néoréalisme italien", "la science-fiction", "le film noir", "les années 50", "l'animation japonaise", "le thriller", "le drame historique"],
-        "Architecture": ["le gothique", "le style roman", "la Renaissance", "l'art déco", "le brutalisme", "l'Antiquité", "le modernisme", "l'architecture asiatique", "les gratte-ciels", "le baroque"],
-        "Mythologie": ["la mythologie nordique", "la mythologie grecque", "la mythologie égyptienne", "la mythologie romaine", "les mythes celtiques", "les légendes asiatiques", "la Mésopotamie", "les héros", "les créatures mythologiques", "la création du monde"],
-        "Gastronomie": ["un plat français", "la gastronomie italienne", "une spécialité japonaise", "un dessert classique", "un plat épicé", "les fromages et vins", "la cuisine levantine", "les techniques culinaires", "la cuisine mexicaine", "la Méditerranée"],
-        "Sculpture": ["la Renaissance", "la Grèce antique", "la sculpture moderne", "l'art roman", "le monumental", "les bustes romains", "le marbre", "le bronze", "l'art abstrait", "le néoclassicisme"],
-        "Arts de la scène": ["la tragédie grecque", "le ballet classique", "Molière", "Shakespeare", "l'opéra italien", "le théâtre de l'absurde", "la comédie musicale", "le théâtre du 20e siècle", "le kabuki", "la danse contemporaine"],
-        "Photographie": ["la photographie humaniste", "le photojournalisme", "le paysage", "le portrait", "la photographie de rue", "le surréalisme", "le pictorialisme", "la guerre", "le noir et blanc", "la mode"],
-        "Bande dessinée": ["la BD franco-belge", "le roman graphique", "le manga classique", "le comic book", "la ligne claire", "la science-fiction", "la BD historique", "les pionniers du 9e art", "les auteurs européens", "le manga seinen"],
-        "Jeu vidéo": ["l'ère 16-bits", "les RPG classiques", "les jeux narratifs", "les pionniers", "les jeux indépendants", "les jeux de plateforme", "la stratégie", "la 3D naissante", "le point & click", "l'aventure épique"]
+        "Poésie": ["le Romantisme", "le Symbolisme", "le Surréalisme", "la poésie du 20ème siècle", "le Parnasse", "la Pléiade", "un poème mélancolique", "un sonnet classique"],
+        "Littérature": ["un roman du 19e siècle", "une pièce de théâtre", "un essai philosophique", "un conte", "le réalisme", "un lauréat du prix Nobel", "la littérature classique"],
+        "Musique": ["le rock classique", "le jazz", "la musique symphonique", "la pop", "la soul", "la chanson française", "le piano solo", "l'opéra"],
+        "Sciences": ["la physique quantique", "la biologie", "l'astronomie", "l'informatique", "les mathématiques", "la médecine", "la révolution industrielle", "l'antiquité scientifique"],
+        "Philosophie": ["l'existentialisme", "le stoïcisme", "la philosophie des Lumières", "la Grèce antique", "le rationalisme", "la phénoménologie", "le nihilisme", "la métaphysique"],
+        "Cinéma": ["le Nouvel Hollywood", "la Nouvelle Vague", "le néoréalisme italien", "la science-fiction", "le film noir", "l'animation japonaise", "le thriller", "le drame historique"],
+        "Architecture": ["le gothique", "le style roman", "la Renaissance", "l'art déco", "le brutalisme", "l'Antiquité", "le modernisme", "l'architecture asiatique", "le baroque"],
+        "Mythologie": ["la mythologie nordique", "la mythologie grecque", "la mythologie égyptienne", "la mythologie romaine", "les mythes celtiques", "les légendes asiatiques", "la création du monde"],
+        "Gastronomie": ["un plat français", "la gastronomie italienne", "une spécialité japonaise", "un dessert classique", "la cuisine levantine", "les techniques culinaires", "la Méditerranée"],
+        "Sculpture": ["la Renaissance", "la Grèce antique", "la sculpture moderne", "l'art roman", "le monumental", "les bustes romains", "le marbre", "le bronze", "le néoclassicisme"],
+        "Arts de la scène": ["la tragédie grecque", "le ballet classique", "Molière", "Shakespeare", "l'opéra italien", "le théâtre de l'absurde", "la comédie musicale", "le kabuki"],
+        "Photographie": ["la photographie humaniste", "le photojournalisme", "le paysage", "le portrait", "la photographie de rue", "le surréalisme", "le pictorialisme", "le noir et blanc"],
+        "Bande dessinée": ["la BD franco-belge", "le roman graphique", "le manga classique", "le comic book", "la ligne claire", "la science-fiction", "la BD historique"],
+        "Jeu vidéo": ["l'ère 16-bits", "les RPG classiques", "les jeux narratifs", "les pionniers", "les jeux indépendants", "les jeux de plateforme", "le point & click"]
     }
     return rng.choice(foci.get(category_name, ["une œuvre incontournable"]))
 
@@ -232,7 +242,10 @@ def ask_deepseek(prompt, date_str):
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "Tu es un érudit classique. Analyses profondes (10 phrases). Pour la poésie, donne TOUJOURS le poème en ENTIER. Réponds STRICTEMENT en JSON pur."},
+            {
+                "role": "system", 
+                "content": "Tu es un érudit classique. Analyses profondes (10 phrases). RÈGLE ABSOLUE : TU DOIS PROPOSER DES ŒUVRES RÉELLES ET HISTORIQUEMENT EXACTES. AUCUNE INVENTION OU HALLUCINATION DE TITRE/AUTEUR N'EST TOLÉRÉE. Réponds STRICTEMENT en JSON pur."
+            },
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"},
@@ -241,34 +254,45 @@ def ask_deepseek(prompt, date_str):
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=60)
         return extract_json(response.json()["choices"][0]["message"]["content"])
-    except Exception as e:
+    except Exception:
         return {"erreur": True}
 
 # --- FONCTIONS DE CONTENU ---
 @st.cache_data(show_spinner=False, ttl=86400*30)
+def fetch_quote_data(date_str):
+    history = load_history().get("Citation", [])
+    avoid_clause = f" INTERDICTION ABSOLUE de proposer un auteur parmi : {', '.join(history[-10:])}." if history else ""
+    prompt = f"Donne une citation antique ou classique marquante pour le {date_str}.{avoid_clause} JSON: {{'citation':'...', 'auteur':'...'}}"
+    
+    data = ask_deepseek(prompt, f"{date_str}_quote")
+    if data and "auteur" in data:
+        save_to_history("Citation", data["auteur"])
+    return data
+
+@st.cache_data(show_spinner=False, ttl=86400*30)
 def get_content_item(category_name, date_str):
     prompts = {
-        "Poésie": "{'titre': '...', 'auteur': '...', 'poeme_entier': 'Le texte INTÉGRAL du poème', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur'}",
-        "Littérature": "{'titre': '...', 'auteur': '...', 'extrait': 'Extrait de roman/essai...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Livre ou Auteur'}",
+        "Poésie": "{'titre': '...', 'auteur': '...', 'poeme_entier': 'Texte INTÉGRAL traduit et adapté en français contemporain moderne et lisible', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Auteur Wikipedia'}",
+        "Littérature": "{'titre': '...', 'auteur': '...', 'extrait': 'Extrait de roman/essai...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Livre Wikipedia'}",
         "Musique": "{'titre': '...', 'artiste': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Artiste musical'}",
         "Sciences": "{'titre': '...', 'inventeur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Invention'}",
-        "Philosophie": "{'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe'}",
-        "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Film'}",
-        "Architecture": "{'titre': '...', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Monument'}",
+        "Philosophie": "{'concept': '...', 'philosophe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Philosophe Wikipedia'}",
+        "Cinéma": "{'titre': '...', 'realisateur': '...', 'annee': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Film Wikipedia'}",
+        "Architecture": "{'titre': 'Nom exact et REEL', 'lieu': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom complet et exact pour Wikipedia'}",
         "Mythologie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Divinité'}",
         "Gastronomie": "{'titre': '...', 'origine': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Plat'}",
-        "Sculpture": "{'titre': '...', 'sculpteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom de la sculpture'}",
+        "Sculpture": "{'titre': 'Nom exact et REEL', 'sculpteur': 'Sculpteur historique VERITABLE', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Nom de la sculpture Wikipedia'}",
         "Arts de la scène": "{'titre': '...', 'auteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Pièce de théâtre ou ballet'}",
-        "Photographie": "{'titre': '...', 'photographe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre de la photographie'}",
+        "Photographie": "{'titre': '...', 'photographe': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre exact photographie'}",
         "Bande dessinée": "{'titre': '...', 'auteur': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Série BD'}",
-        "Jeu vidéo": "{'titre': '...', 'studio': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre du jeu vidéo'}"
+        "Jeu vidéo": "{'titre': '...', 'studio': '...', 'analyse': '...', 'lien_wiki': '...', 'image_query': 'Titre jeu video'}"
     }
     
     focus = get_daily_focus(category_name, date_str)
     history = load_history().get(category_name, [])
     avoid_clause = f" INTERDICTION ABSOLUE de proposer ces œuvres (déjà vues) : {', '.join(history)}." if history else ""
         
-    prompt_complet = f"Édition du {date_str}. Propose une NOUVELLE œuvre pour : {category_name}. Thème du jour imposé : {focus}.{avoid_clause} Format strictement respecté : {prompts[category_name]}"
+    prompt_complet = f"Édition du {date_str}. Propose une NOUVELLE œuvre (RÉELLE et HISTORIQUE) pour : {category_name}. Thème du jour imposé : {focus}.{avoid_clause} Format strictement respecté : {prompts[category_name]}"
     
     res = ask_deepseek(prompt_complet, f"{date_str}_{category_name}")
     if not res.get("erreur"):
@@ -335,7 +359,7 @@ def display_exposition(target_date, context_id):
     st.markdown(f"<p style='text-align: center; color: #555; font-size: 1.4rem; font-style: italic;'>Édition du {target_date.strftime('%d %B %Y')}</p>", unsafe_allow_html=True)
 
     with st.spinner("Les Muses préparent le banquet..."):
-        quote = ask_deepseek(f"Citation antique ou classique pour le {date_str}. JSON: {{'citation':'...', 'auteur':'...'}}", date_str)
+        quote = fetch_quote_data(date_str)
         art = get_art_safe(date_str)
         
         blocks = [
@@ -346,7 +370,7 @@ def display_exposition(target_date, context_id):
             ("Bande dessinée", "#B8860B", "🖋️"), ("Jeu vidéo", "#2E8B57", "🎮")
         ]
         
-        if not quote.get("erreur"):
+        if quote and not quote.get("erreur"):
             st.markdown(f"<div class='quote-box'>« {quote.get('citation')} »<br><br><small>— {quote.get('auteur')}</small></div>", unsafe_allow_html=True)
             
         render_block_safe("🖼️", "Beaux-Arts", art, date_str, context_id, color="#800020")
@@ -364,6 +388,7 @@ with t1: display_exposition(datetime.date.today(), context_id="today")
 with t2:
     d = st.date_input("Date :", value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
     if d != datetime.date.today(): display_exposition(d, context_id="archive")
+
 with t3:
     if storage.use_cloud:
         st.success("☁️ Sauvegarde Cloud activée. Vos favoris et votre historique sont protégés à vie !")
