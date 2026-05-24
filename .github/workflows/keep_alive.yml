@@ -1,17 +1,1 @@
-name: Keep Streamlit App Awake
 
-# Déclencheurs de l'action
-on:
-  schedule:
-    # S'exécute toutes les heures (Ping automatique)
-    - cron: '0 * * * *'
-  # Permet aussi de lancer le script manuellement depuis GitHub si besoin
-  workflow_dispatch: 
-
-jobs:
-  ping:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Visite automatique de l'application
-        # ⚠️ ATTENTION : REMPLACEZ L'URL CI-DESSOUS PAR LE VRAI LIEN DE VOTRE APPLICATION STREAMLIT
-        run: curl -sL https://dailyculture-hgdoy5xfmp8552pgydbfsf.streamlit.app/ > /dev/null
