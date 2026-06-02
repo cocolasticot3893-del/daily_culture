@@ -3,26 +3,60 @@ daily_culture.py — Application principale "Le Banquet des Muses".
 
 Point d'entrée Streamlit. Contient :
   - CSS Premium Gréco-Romain
-  - Appels DeepSeek (prompts enrichis)
-  - Moteur média (Wikipédia + Pollinations.ai)
-  - Interface utilisateur (onglets, blocs, boutons)
+  - Appels DeepSeek (prompts enrichis) avec retry tenacity
+  - Moteur média (Wikipédia + Pollinations.ai) avec retry
+  - Interface utilisateur (onglets, blocs, boutons, partage)
+  - Progression dynamique via st.status()
 
 La persistance est déléguée à database.py (Supabase).
+La configuration statique est externalisée dans config.py.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
+import logging
 import random
 import re
 import urllib.parse
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 import streamlit as st
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
+from config import (
+    ABSTRACT_CATEGORIES,
+    CATEGORIES,
+    ENGLISH_PRIMARY_CATEGORIES,
+    FOCI,
+    JSON_TEMPLATES,
+    MET_OBJECT_IDS,
+    NO_AI_FALLBACK_CATEGORIES,
+    NORMALIZATION_RULES,
+    REQUIRED_SECRETS,
+    RETRY_CONFIG,
+    SEMANTIC_BARRIERS,
+)
 from database import SupabaseClient
+
+# ============================================================
+# LOGGING
+# ============================================================
+logger = logging.getLogger("banquet_des_muses")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        "[%(asctime)s] %(levelname)s — %(message)s"
+    ))
+    logger.addHandler(handler)
 
 # ============================================================
 # CONFIGURATION STREAMLIT
@@ -35,10 +69,12 @@ st.set_page_config(
 )
 
 # ============================================================
-# CSS PREMIUM (Style Gréco-Romain)
+# CSS PREMIUM (Style Gréco-Romain) — mis en cache
 # ============================================================
-st.markdown(
-    """
+@st.cache_resource
+def _get_css() -> str:
+    """Retourne le bloc CSS complet (mis en cache pour éviter le re-rendu)."""
+    return """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&display=swap');
 
@@ -104,16 +140,30 @@ p, div, span { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; line
     font-family: 'Cormorant Garamond', serif; font-style: italic;
     color: #555; font-size: 1.1rem; margin-top: 8px;
 }
+
+.error-block {
+    text-align: center; padding: 40px 20px; margin: 25px 0;
+    background: #fdfbf7; border: 1px solid #d4c4a8;
+    border-left: 4px solid #800020;
+    font-family: 'Cormorant Garamond', serif;
+}
+.error-block .muse-icon { font-size: 3rem; margin-bottom: 10px; }
+.error-block .error-title {
+    font-family: 'Cinzel', serif; color: #800020;
+    font-size: 1.3rem; margin-bottom: 8px;
+}
+.error-block .error-detail {
+    color: #555; font-style: italic; font-size: 1.1rem;
+}
 </style>
-""",
-    unsafe_allow_html=True,
-)
+"""
+
+st.markdown(_get_css(), unsafe_allow_html=True)
 
 # ============================================================
 # VÉRIFICATION DES SECRETS
 # ============================================================
-REQUIRED_SECRETS = ["DEEPSEEK_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
-missing_secrets = [s for s in REQUIRED_SECRETS if s not in st.secrets]
+missing_secrets: list[str] = [s for s in REQUIRED_SECRETS if s not in st.secrets]
 if missing_secrets:
     st.error(
         "❌ **Clés manquantes dans les Secrets Streamlit :** "
@@ -133,8 +183,18 @@ db = SupabaseClient()
 # ============================================================
 # HELPER JSON
 # ============================================================
-def extract_json(text: str) -> dict:
-    """Extrait le premier objet JSON d'une chaîne de caractères."""
+def extract_json(text: str) -> dict[str, Any]:
+    """Extrait le premier objet JSON d'une chaîne de caractères.
+
+    Args:
+        text: Chaîne contenant potentiellement du JSON.
+
+    Returns:
+        Dictionnaire parsé.
+
+    Raises:
+        ValueError: Si le JSON est invalide ou introuvable.
+    """
     try:
         match = re.search(r"\{.*\}", text.strip(), re.DOTALL)
         if match:
@@ -148,7 +208,14 @@ def extract_json(text: str) -> dict:
 # MOTEUR MÉDIA — Images sécurisées HTTPS
 # ============================================================
 def _normalize_url(raw_url: str | None) -> str | None:
-    """Garantit que l'URL commence par 'https://'."""
+    """Garantit que l'URL commence par 'https://'.
+
+    Args:
+        raw_url: URL brute potentiellement non sécurisée.
+
+    Returns:
+        URL normalisée ou None si l'entrée est vide.
+    """
     if not raw_url:
         return None
     url = str(raw_url)
@@ -161,67 +228,76 @@ def _normalize_url(raw_url: str | None) -> str | None:
     return url
 
 
+@retry(
+    stop=stop_after_attempt(RETRY_CONFIG["max_attempts"]),
+    wait=wait_exponential(
+        multiplier=2,
+        min=RETRY_CONFIG["min_wait"],
+        max=RETRY_CONFIG["max_wait"],
+    ),
+    retry=retry_if_exception_type((requests.RequestException, json.JSONDecodeError)),
+)
 def get_wiki_image_secure(query: str, lang: str = "fr") -> Optional[str]:
-    """Récupère une image Wikipédia avec garantie HTTPS.
+    """Récupère une image Wikipédia avec garantie HTTPS et retry.
 
-    Retourne None si aucune image trouvée.
+    Args:
+        query: Terme de recherche.
+        lang: Code de langue Wikipédia (défaut: "fr").
+
+    Returns:
+        URL de l'image ou None si aucune image trouvée.
     """
     if not query or not query.strip():
         return None
     query = str(query).strip()
     headers = {"User-Agent": "BanquetDesMuses/7.0"}
-    try:
-        # Recherche de la page
-        search_url = (
-            f"https://{lang}.wikipedia.org/w/api.php"
-            f"?action=query&list=search&srsearch={urllib.parse.quote(query)}"
-            f"&utf8=&format=json&srlimit=1"
-        )
-        resp = requests.get(search_url, headers=headers, timeout=8)
-        resp.raise_for_status()
-        search_data = resp.json()
-        if not search_data.get("query", {}).get("search"):
-            return None
-        page_title = search_data["query"]["search"][0]["title"]
-
-        # Résumé de la page
-        summary_url = (
-            f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
-            f"{urllib.parse.quote(page_title.replace(' ', '_'))}"
-        )
-        resp2 = requests.get(summary_url, headers=headers, timeout=8)
-        resp2.raise_for_status()
-        summary_data = resp2.json()
-
-        raw_url = (
-            summary_data.get("originalimage", {}).get("source")
-            or summary_data.get("thumbnail", {}).get("source")
-        )
-        return _normalize_url(raw_url)
-
-    except (requests.RequestException, json.JSONDecodeError, KeyError):
+    # Recherche de la page
+    search_url = (
+        f"https://{lang}.wikipedia.org/w/api.php"
+        f"?action=query&list=search&srsearch={urllib.parse.quote(query)}"
+        f"&utf8=&format=json&srlimit=1"
+    )
+    resp = requests.get(search_url, headers=headers, timeout=8)
+    resp.raise_for_status()
+    search_data = resp.json()
+    if not search_data.get("query", {}).get("search"):
         return None
+    page_title = search_data["query"]["search"][0]["title"]
+
+    # Résumé de la page
+    summary_url = (
+        f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
+        f"{urllib.parse.quote(page_title.replace(' ', '_'))}"
+    )
+    resp2 = requests.get(summary_url, headers=headers, timeout=8)
+    resp2.raise_for_status()
+    summary_data = resp2.json()
+
+    raw_url = (
+        summary_data.get("originalimage", {}).get("source")
+        or summary_data.get("thumbnail", {}).get("source")
+    )
+    return _normalize_url(raw_url)
 
 
-def fetch_image_cascade(res_dict: dict, category: str) -> Optional[str]:
+def fetch_image_cascade(res_dict: dict[str, Any], category: str) -> Optional[str]:
     """Chaîne de récupération d'image avec règles métier.
 
     - Wikipédia en priorité (langue adaptée à la catégorie)
     - Architecture & Sculpture → pas de fallback IA (placeholder élégant)
     - Catégories abstraites → Pollinations avec prompt enrichi
-    """
-    primary_lang = (
-        "en"
-        if category
-        in [
-            "Cinéma", "Musique", "Architecture", "Littérature",
-            "Jeu vidéo", "Photographie", "Sculpture", "Beaux-Arts",
-        ]
-        else "fr"
-    )
 
-    titre = res_dict.get("titre", "")
-    auteur = (
+    Args:
+        res_dict: Dictionnaire de l'oeuvre (contient titre, auteur, image_query).
+        category: Nom de la catégorie.
+
+    Returns:
+        URL de l'image ou None.
+    """
+    primary_lang = "en" if category in ENGLISH_PRIMARY_CATEGORIES else "fr"
+
+    titre: str = res_dict.get("titre", "")
+    auteur: str = (
         res_dict.get("auteur")
         or res_dict.get("artiste")
         or res_dict.get("sculpteur")
@@ -232,48 +308,52 @@ def fetch_image_cascade(res_dict: dict, category: str) -> Optional[str]:
     )
 
     # Requêtes par ordre de pertinence
-    queries_raw = [
+    queries_raw: list[Any] = [
         res_dict.get("image_query"),
         f"{titre} {auteur}".strip(),
         titre,
     ]
-    queries = [str(q) for q in queries_raw if q and len(str(q)) > 2]
+    queries: list[str] = [str(q) for q in queries_raw if q and len(str(q)) > 2]
 
     # 1. Wikipédia (langue primaire puis secondaire)
     for q in queries:
-        img = get_wiki_image_secure(q, primary_lang)
-        if img:
-            return img
-        secondary = "fr" if primary_lang == "en" else "en"
-        img = get_wiki_image_secure(q, secondary)
-        if img:
-            return img
+        try:
+            img = get_wiki_image_secure(q, primary_lang)
+            if img:
+                return img
+            secondary = "fr" if primary_lang == "en" else "en"
+            img = get_wiki_image_secure(q, secondary)
+            if img:
+                return img
+        except (requests.RequestException, json.JSONDecodeError):
+            logger.warning("Échec récupération image Wikipédia pour : %s", q)
+            continue
 
     # 2. Règle stricte : Architecture & Sculpture → pas d'IA
-    if category in ["Architecture", "Sculpture"]:
+    if category in NO_AI_FALLBACK_CATEGORIES:
         return None
 
     # 3. Fallback Pollinations.ai
     if not queries:
         return None
 
-    clean_query = re.sub(r"[^a-zA-Z0-9\s]", " ", f"{titre} {auteur}").strip()
+    clean_query: str = re.sub(r"[^a-zA-Z0-9\s]", " ", f"{titre} {auteur}").strip()
     if not clean_query:
         clean_query = str(queries[0])
 
-    if category in ["Philosophie", "Mythologie", "Poésie"]:
-        ai_prompt = (
+    if category in ABSTRACT_CATEGORIES:
+        ai_prompt: str = (
             f"Cinematic oil painting style, dramatic lighting, museum quality, "
             f"masterpiece elegant illustration of {clean_query}, {category} concept, "
             f"highly detailed, art gallery aesthetics"
         )
     else:
-        ai_prompt = (
+        ai_prompt: str = (
             f"Masterpiece elegant illustration of {clean_query}, "
             f"{category} concept, highly detailed"
         )
 
-    safe_prompt = urllib.parse.quote(ai_prompt)
+    safe_prompt: str = urllib.parse.quote(ai_prompt)
     return f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=500&nologo=true"
 
 
@@ -281,100 +361,37 @@ def fetch_image_cascade(res_dict: dict, category: str) -> Optional[str]:
 # FOCUS QUOTIDIEN (déterministe par date)
 # ============================================================
 def get_daily_focus(category_name: str, date_str: str) -> str:
-    """Sélection déterministe du sous-thème du jour via seed basée sur la date."""
+    """Sélection déterministe du sous-thème du jour via seed basée sur la date.
+
+    Args:
+        category_name: Nom de la catégorie.
+        date_str: Date au format "YYYY-MM-DD".
+
+    Returns:
+        Sous-thème choisi aléatoirement de manière déterministe.
+    """
     seed_val = int(date_str.replace("-", ""))
     rng = random.Random(seed_val)
-
-    foci = {
-        "Poésie": [
-            "le Romantisme", "le Symbolisme", "le Surréalisme",
-            "la poésie du 20ème siècle", "le Parnasse", "la Pléiade",
-            "un poème mélancolique", "un sonnet classique",
-            "la poésie lyrique", "un haïku ou poème court",
-        ],
-        "Littérature": [
-            "un roman du 19e siècle", "un essai philosophique", "un conte",
-            "le réalisme", "un lauréat du prix Nobel", "la littérature classique",
-            "un roman épistolaire", "la littérature du 20e siècle",
-        ],
-        "Musique": [
-            "le rock classique", "le jazz", "la musique symphonique", "la pop",
-            "la soul", "la chanson française", "le piano solo", "l'opéra",
-            "la musique baroque", "le blues",
-        ],
-        "Sciences": [
-            "la physique quantique", "la biologie", "l'astronomie",
-            "l'informatique", "les mathématiques", "la médecine",
-            "la révolution industrielle", "l'antiquité scientifique",
-            "la chimie", "les grandes inventions",
-        ],
-        "Philosophie": [
-            "l'existentialisme", "le stoïcisme", "la philosophie des Lumières",
-            "la Grèce antique", "le rationalisme", "la phénoménologie",
-            "le nihilisme", "la métaphysique", "la philosophie politique",
-            "l'éthique",
-        ],
-        "Cinéma": [
-            "le Nouvel Hollywood", "la Nouvelle Vague", "le néoréalisme italien",
-            "la science-fiction", "le film noir", "l'animation japonaise",
-            "le thriller", "le drame historique", "le western",
-        ],
-        "Architecture": [
-            "le gothique", "le style roman", "la Renaissance", "l'art déco",
-            "le brutalisme", "l'Antiquité", "le modernisme",
-            "l'architecture asiatique", "le baroque", "le néoclassicisme",
-        ],
-        "Mythologie": [
-            "la mythologie nordique", "la mythologie grecque",
-            "la mythologie égyptienne", "la mythologie romaine",
-            "les mythes celtiques", "les légendes asiatiques",
-            "la création du monde", "les héros mythologiques",
-        ],
-        "Gastronomie": [
-            "un plat français", "la gastronomie italienne",
-            "une spécialité japonaise", "un dessert classique",
-            "la cuisine levantine", "les techniques culinaires",
-            "la Méditerranée", "la cuisine végétale",
-        ],
-        "Sculpture": [
-            "la Renaissance", "la Grèce antique", "la sculpture moderne",
-            "l'art roman", "le monumental", "les bustes romains",
-            "le marbre", "le bronze", "le néoclassicisme", "le baroque sculptural",
-        ],
-        "Arts de la scène": [
-            "la tragédie grecque", "le ballet classique", "Molière",
-            "Shakespeare", "l'opéra italien", "le théâtre de l'absurde",
-            "la comédie musicale", "le kabuki", "la danse contemporaine",
-        ],
-        "Photographie": [
-            "la photographie humaniste", "le photojournalisme", "le paysage",
-            "le portrait", "la photographie de rue", "le surréalisme",
-            "le pictorialisme", "le noir et blanc",
-        ],
-        "Bande dessinée": [
-            "la BD franco-belge", "le roman graphique", "le manga classique",
-            "le comic book", "la ligne claire", "la science-fiction",
-            "la BD historique", "le one-shot",
-        ],
-        "Jeu vidéo": [
-            "l'ère 16-bits", "les RPG classiques", "les jeux narratifs",
-            "les pionniers", "les jeux indépendants", "les jeux de plateforme",
-            "le point & click", "les jeux d'aventure",
-        ],
-    }
-    return rng.choice(foci.get(category_name, ["une oeuvre incontournable"]))
+    return rng.choice(FOCI.get(category_name, ["une oeuvre incontournable"]))
 
 
 # ============================================================
 # MOTEUR DE RECOMMENDATION
 # ============================================================
 def build_avoid_clause(category: str) -> str:
-    """Construit la clause d'exclusion absolue pour le prompt DeepSeek."""
-    titles = db.get_seen_titles(category)
+    """Construit la clause d'exclusion absolue pour le prompt DeepSeek.
+
+    Args:
+        category: Nom de la catégorie.
+
+    Returns:
+        Texte de clause d'exclusion ou chaîne vide.
+    """
+    titles: list[str] = db.get_seen_titles(category)
     if not titles:
         return ""
-    sample = titles[-60:]  # Limite de contexte
-    lines = "\n".join(f"  - {t}" for t in sample)
+    sample: list[str] = titles[-60:]  # Limite de contexte
+    lines: str = "\n".join(f"  - {t}" for t in sample)
     return (
         "\n\nLISTE D'EXCLUSION ABSOLUE (ne surtout PAS proposer ces oeuvres, deja vues) :\n"
         f"{lines}"
@@ -382,10 +399,14 @@ def build_avoid_clause(category: str) -> str:
 
 
 def build_reco_clause() -> str:
-    """Construit la clause de recommandation basée sur les préférences."""
-    liked = db.get_liked_genres()
-    disliked = db.get_disliked_authors()
-    parts = []
+    """Construit la clause de recommandation basée sur les préférences.
+
+    Returns:
+        Texte de clause de recommandation ou chaîne vide.
+    """
+    liked: list[str] = db.get_liked_genres()
+    disliked: list[str] = db.get_disliked_authors()
+    parts: list[str] = []
     if liked:
         parts.append(
             "ORIENTATION RECOMMANDATION : L'utilisateur appreciate particulierement "
@@ -401,17 +422,36 @@ def build_reco_clause() -> str:
 
 
 # ============================================================
-# APPEL DEEPSEEK
+# APPEL DEEPSEEK — avec retry et gestion du cache des erreurs
 # ============================================================
-@st.cache_data(show_spinner=False, ttl=3600)
-def ask_deepseek(prompt: str, cache_salt: str) -> dict:
-    """Interroge DeepSeek avec garantie de réponse JSON."""
+@retry(
+    stop=stop_after_attempt(RETRY_CONFIG["max_attempts"]),
+    wait=wait_exponential(
+        multiplier=2,
+        min=RETRY_CONFIG["min_wait"],
+        max=RETRY_CONFIG["max_wait"],
+    ),
+    retry=retry_if_exception_type((requests.RequestException, ValueError)),
+)
+def _call_deepseek(prompt: str) -> dict[str, Any]:
+    """Effectue l'appel HTTP à l'API DeepSeek (sans cache).
+
+    Args:
+        prompt: Prompt complet à envoyer.
+
+    Returns:
+        Dictionnaire JSON de la réponse.
+
+    Raises:
+        requests.RequestException: En cas d'échec réseau.
+        ValueError: En cas d'erreur de parsing JSON.
+    """
     url = "https://api.deepseek.com/chat/completions"
-    headers = {
+    headers: dict[str, str] = {
         "Authorization": f"Bearer {DEEPSEEK_KEY}",
         "Content-Type": "application/json",
     }
-    payload = {
+    payload: dict[str, Any] = {
         "model": "deepseek-chat",
         "messages": [
             {
@@ -436,12 +476,35 @@ def ask_deepseek(prompt: str, cache_salt: str) -> dict:
         "temperature": 0.2,
         "max_tokens": 2048,
     }
+    resp = requests.post(url, headers=headers, json=payload, timeout=90)
+    resp.raise_for_status()
+    content: str = resp.json()["choices"][0]["message"]["content"]
+    return extract_json(content)
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def ask_deepseek(prompt: str, cache_salt: str) -> dict[str, Any]:
+    """Interroge DeepSeek avec garantie de réponse JSON et cache.
+
+    ATTENTION : Les réponses d'erreur ({"erreur": True}) ne sont PAS mises en cache
+    pour permettre un retry immédiat au prochain appel.
+
+    Args:
+        prompt: Prompt à envoyer à DeepSeek.
+        cache_salt: Sel de cache (ex: date + catégorie).
+
+    Returns:
+        Dictionnaire JSON de la réponse, ou {"erreur": True} si échec.
+    """
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=90)
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        return extract_json(content)
-    except Exception:
+        result: dict[str, Any] = _call_deepseek(prompt)
+        # Ne pas mettre en cache les réponses d'erreur
+        if result.get("erreur"):
+            st.cache_data.clear()
+            logger.warning("DeepSeek a retourné une erreur pour : %s", cache_salt)
+        return result
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("Échec appel DeepSeek (%s) : %s", cache_salt, exc)
         return {"erreur": True}
 
 
@@ -449,22 +512,29 @@ def ask_deepseek(prompt: str, cache_salt: str) -> dict:
 # CITATION QUOTIDIENNE
 # ============================================================
 @st.cache_data(show_spinner=False, ttl=3600)
-def fetch_quote_data(date_str: str) -> dict:
-    """Génère la citation du jour avec évitement des auteurs récents."""
-    seen_authors = db.get_seen_titles("Citation")
-    avoid_clause = ""
+def fetch_quote_data(date_str: str) -> dict[str, Any]:
+    """Génère la citation du jour avec évitement des auteurs récents.
+
+    Args:
+        date_str: Date au format "YYYY-MM-DD".
+
+    Returns:
+        Dictionnaire contenant "citation" et "auteur", ou {"erreur": True}.
+    """
+    seen_authors: list[str] = db.get_seen_titles("Citation")
+    avoid_clause: str = ""
     if seen_authors:
-        recent = seen_authors[-15:]
+        recent: list[str] = seen_authors[-15:]
         avoid_clause = (
             " INTERDICTION ABSOLUE de proposer un auteur parmi les suivants "
             f"(deja cites recemment) : {', '.join(recent)}."
         )
-    prompt = (
+    prompt: str = (
         f"Donne une citation antique ou classique marquante, profonde et inspirante "
         f"pour l'edition du {date_str}.{avoid_clause}\n\n"
         'JSON attendu : {"citation": "...", "auteur": "..."}'
     )
-    data = ask_deepseek(prompt, f"{date_str}_quote")
+    data: dict[str, Any] = ask_deepseek(prompt, f"{date_str}_quote")
     if data and data.get("auteur"):
         db.add_to_seen("Citation", data["auteur"], date_seen=date_str)
     return data
@@ -474,133 +544,36 @@ def fetch_quote_data(date_str: str) -> dict:
 # CONTENU PAR CATÉGORIE
 # ============================================================
 @st.cache_data(show_spinner=False, ttl=3600)
-def get_content_item(category_name: str, date_str: str) -> dict:
-    """Génère une oeuvre pour une catégorie avec anti-repetition et recommandation."""
+def get_content_item(category_name: str, date_str: str) -> dict[str, Any]:
+    """Génère une oeuvre pour une catégorie avec anti-repetition et recommandation.
 
-    # Templates JSON
-    json_templates = {
-        "Poesie": (
-            '{"titre": "...", "auteur": "...", '
-            '"poeme_entier": "Texte integral traduit en francais contemporain moderne. '
-            "Si l'original est en vieux francais, le traduire impérativement "
-            'en francais actuel fluide, tout en conservant le rythme poetique.", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Auteur Wikipedia"}'
-        ),
-        "Litterature": (
-            '{"titre": "...", "auteur": "...", '
-            '"extrait": "Extrait de roman ou essai en francais contemporain. '
-            "Si le texte original est en vieux francais, l'adapter "
-            'en francais moderne fluide et accessible.", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Livre Wikipedia"}'
-        ),
-        "Musique": (
-            '{"titre": "...", "artiste": "...", "annee": "...", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Artiste musical"}'
-        ),
-        "Sciences": (
-            '{"titre": "...", "inventeur": "...", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Invention"}'
-        ),
-        "Philosophie": (
-            '{"concept": "...", "philosophe": "...", '
-            '"analyse": "...", "lien_wiki": "...", '
-            '"image_query": "Philosophe Wikipedia"}'
-        ),
-        "Cinema": (
-            '{"titre": "...", "realisateur": "...", "annee": "...", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Film Wikipedia"}'
-        ),
-        "Architecture": (
-            '{"titre": "Nom exact et REEL", "lieu": "...", "architecte": "...", '
-            '"analyse": "...", "lien_wiki": "...", '
-            '"image_query": "Nom complet exact pour Wikipedia"}'
-        ),
-        "Mythologie": (
-            '{"titre": "...", "origine": "...", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Divinite"}'
-        ),
-        "Gastronomie": (
-            '{"titre": "...", "origine": "...", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Plat"}'
-        ),
-        "Sculpture": (
-            '{"titre": "Nom exact et REEL", '
-            '"sculpteur": "Sculpteur historique VERITABLE", '
-            '"analyse": "...", "lien_wiki": "...", '
-            '"image_query": "Nom de la sculpture Wikipedia"}'
-        ),
-        "Arts de la scene": (
-            '{"titre": "...", "auteur": "...", '
-            '"analyse": "...", "lien_wiki": "...", '
-            '"image_query": "Piece de theatre ou ballet"}'
-        ),
-        "Photographie": (
-            '{"titre": "...", "photographe": "...", '
-            '"analyse": "...", "lien_wiki": "...", '
-            '"image_query": "Titre exact photographie"}'
-        ),
-        "Bande dessinee": (
-            '{"titre": "...", "auteur": "...", '
-            '"analyse": "...", "lien_wiki": "...", "image_query": "Serie BD"}'
-        ),
-        "Jeu video": (
-            '{"titre": "...", "studio": "...", '
-            '"analyse": "...", "lien_wiki": "...", '
-            '"image_query": "Titre jeu video"}'
-        ),
-    }
+    Args:
+        category_name: Nom de la catégorie.
+        date_str: Date au format "YYYY-MM-DD".
 
-    focus = get_daily_focus(category_name, date_str)
+    Returns:
+        Dictionnaire de l'oeuvre générée, ou {"erreur": True}.
+    """
+    focus: str = get_daily_focus(category_name, date_str)
 
     # Anti-repetition
-    avoid_clause = build_avoid_clause(category_name)
+    avoid_clause: str = build_avoid_clause(category_name)
 
     # Profil de recommandation
-    reco_clause = build_reco_clause()
+    reco_clause: str = build_reco_clause()
 
     # Barrieres semantiques anti-doublons
-    semantic_barrier = ""
-    if category_name == "Litterature":
-        semantic_barrier = (
-            "\n\nBARRIERE SEMANTIQUE STRICTE : Tu es dans la categorie LITTERATURE. "
-            "Tu NE DOIS ABSOLUMENT PAS proposer de poesie, de poeme, de recueil de "
-            "poesie, ni de piece de theatre. Tu dois proposer UNIQUEMENT un roman, "
-            "un essai, un conte ou un recit en prose."
-        )
-    elif category_name == "Poesie":
-        semantic_barrier = (
-            "\n\nBARRIERE SEMANTIQUE STRICTE : Tu es dans la categorie POESIE. "
-            "Tu NE DOIS ABSOLUMENT PAS proposer de roman, d'essai, de conte ou "
-            "de recit en prose. Tu dois proposer UNIQUEMENT un poeme ou un recueil "
-            "de poesie."
-        )
-    elif category_name == "Arts de la scene":
-        semantic_barrier = (
-            "\n\nBARRIERE SEMANTIQUE STRICTE : Tu es dans la categorie "
-            "ARTS DE LA SCENE. Tu NE DOIS PAS proposer de piece de theatre qui "
-            "serait deja classable en Litterature. Concentre-toi sur la mise en "
-            "scene, la performance, la danse, l'opera ou le ballet."
-        )
+    semantic_barrier: str = SEMANTIC_BARRIERS.get(category_name, "")
 
     # Normalisation linguistique
-    normalization_rule = ""
-    if category_name in ["Poesie", "Litterature"]:
-        normalization_rule = (
-            "\n\nREGLE DE LISIBILITE OBLIGATOIRE : "
-            "Si l'oeuvre originale est ecrite en vieux francais, moyen francais, "
-            "ou toute forme linguistique archaique, tu DOIS imperativement la "
-            "traduire ou l'adapter en francais contemporain fluide et accessible. "
-            "Conserve la structure poetique, le rythme et la puissance emotionnelle "
-            "de l'original. Le resultat doit etre comprehensible par un lecteur "
-            "moderne sans effort."
-        )
+    normalization_rule: str = NORMALIZATION_RULES.get(category_name, "")
 
     # Assemblage du prompt
-    json_example = json_templates.get(
+    json_example: str = JSON_TEMPLATES.get(
         category_name,
         '{"titre": "...", "analyse": "..."}',
     )
-    prompt = (
+    prompt: str = (
         f"Edition du {date_str}. Propose une NOUVELLE oeuvre REELLE et HISTORIQUE "
         f"pour la categorie : {category_name}.\n\n"
         f"Theme du jour impose : {focus}.\n"
@@ -611,7 +584,7 @@ def get_content_item(category_name: str, date_str: str) -> dict:
         f"\n\nFormat strictement respecte : {json_example}"
     )
 
-    res = ask_deepseek(prompt, f"{date_str}_{category_name}")
+    res: dict[str, Any] = ask_deepseek(prompt, f"{date_str}_{category_name}")
     if res.get("erreur"):
         return res
 
@@ -619,8 +592,8 @@ def get_content_item(category_name: str, date_str: str) -> dict:
     res["image"] = fetch_image_cascade(res, category_name)
 
     # Historique
-    titre = res.get("titre") or res.get("concept") or "Inconnu"
-    auteur = (
+    titre: str = res.get("titre") or res.get("concept") or "Inconnu"
+    auteur: str = (
         res.get("auteur")
         or res.get("artiste")
         or res.get("sculpteur")
@@ -639,29 +612,40 @@ def get_content_item(category_name: str, date_str: str) -> dict:
 # ============================================================
 # BEAUX-ARTS (MET Museum)
 # ============================================================
+@retry(
+    stop=stop_after_attempt(RETRY_CONFIG["max_attempts"]),
+    wait=wait_exponential(
+        multiplier=2,
+        min=RETRY_CONFIG["min_wait"],
+        max=RETRY_CONFIG["max_wait"],
+    ),
+    retry=retry_if_exception_type((requests.RequestException, KeyError)),
+)
 @st.cache_data(show_spinner=False, ttl=3600)
-def get_art_safe(date_str: str) -> dict:
-    """Oeuvre du MET Museum analysee par DeepSeek."""
+def get_art_safe(date_str: str) -> dict[str, Any]:
+    """Oeuvre du MET Museum analysée par DeepSeek, avec retry.
+
+    Args:
+        date_str: Date au format "YYYY-MM-DD".
+
+    Returns:
+        Dictionnaire de l'oeuvre d'art, ou {"erreur": True}.
+    """
     random.seed(int(date_str.replace("-", "")))
-    object_ids = [
-        436535, 436528, 436532, 435882, 435809,
-        436533, 436529, 437112, 436121, 459123,
-        437392, 437826, 438017, 435987, 436155,
-    ]
     try:
-        obj_id = random.choice(object_ids)
-        resp = requests.get(
+        obj_id: int = random.choice(MET_OBJECT_IDS)
+        resp: dict[str, Any] = requests.get(
             f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}",
             timeout=15,
         ).json()
 
-        title = resp.get("title", "Oeuvre d'art")
-        artist = resp.get("artistDisplayName", "Artiste inconnu")
-        image_url = _normalize_url(
+        title: str = resp.get("title", "Oeuvre d'art")
+        artist: str = resp.get("artistDisplayName", "Artiste inconnu")
+        image_url: str | None = _normalize_url(
             resp.get("primaryImageSmall") or resp.get("primaryImage")
         )
 
-        ds = ask_deepseek(
+        ds: dict[str, Any] = ask_deepseek(
             f"Analyse artistique approfondie de l'oeuvre '{title}' par {artist}. "
             f'JSON attendu : {{"titre_fr": "...", "analyse": "...", '
             f'"lien_wiki": "..."}}',
@@ -675,7 +659,8 @@ def get_art_safe(date_str: str) -> dict:
             "analyse": ds.get("analyse", ""),
             "lien_wiki": ds.get("lien_wiki") or resp.get("objectURL", ""),
         }
-    except Exception:
+    except Exception as exc:
+        logger.error("Échec récupération MET Museum : %s", exc)
         return {"erreur": True}
 
 
@@ -685,17 +670,42 @@ def get_art_safe(date_str: str) -> dict:
 def render_block_safe(
     icon: str,
     label: str,
-    data: dict,
+    data: dict[str, Any],
     date_str: str,
     context_id: str,
     color: str = "#c5a059",
 ) -> None:
-    """Affiche un bloc oeuvre complet (titre, image, analyse, boutons)."""
+    """Affiche un bloc oeuvre complet (titre, image, analyse, boutons).
+
+    En cas d'erreur, affiche un bloc stylisé "Les Muses sont en retard..."
+    au lieu d'un silence gênant.
+
+    Args:
+        icon: Emoji/icône de la catégorie.
+        label: Nom de la catégorie.
+        data: Dictionnaire de l'oeuvre.
+        date_str: Date au format "YYYY-MM-DD".
+        context_id: Identifiant de contexte (ex: "today", "archive").
+        color: Couleur hexadécimale du thème de la catégorie.
+    """
     if not data or data.get("erreur"):
+        st.markdown(
+            f"""
+            <div class="error-block">
+                <div class="muse-icon">{icon}</div>
+                <div class="error-title">{label} — Les Muses sont en retard...</div>
+                <div class="error-detail">
+                    Les Parques n'ont pas encore filé cette oeuvre aujourd'hui.
+                    Revenez dans quelques instants, le savoir antique se mérite.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
-    titre = data.get("titre") or data.get("concept") or "Inconnu"
-    auteur = (
+    titre: str = data.get("titre") or data.get("concept") or "Inconnu"
+    auteur: str = (
         data.get("auteur")
         or data.get("artiste")
         or data.get("realisateur")
@@ -709,11 +719,11 @@ def render_block_safe(
         or data.get("architecte")
         or ""
     )
-    analyse = data.get("analyse") or ""
-    image_url = data.get("image")
-    wiki = data.get("lien_wiki")
-    content_text = data.get("poeme_entier") or data.get("extrait")
-    safe_key = f"{label}_{date_str}_{context_id}"
+    analyse: str = data.get("analyse") or ""
+    image_url: str | None = data.get("image")
+    wiki: str | None = data.get("lien_wiki")
+    content_text: str | None = data.get("poeme_entier") or data.get("extrait")
+    safe_key: str = f"{label}_{date_str}_{context_id}"
 
     with st.container(border=True):
         st.markdown(
@@ -743,7 +753,7 @@ def render_block_safe(
         # Image ou placeholder
         if image_url:
             st.image(image_url, use_container_width=True)
-        elif label in ["Architecture", "Sculpture"]:
+        elif label in NO_AI_FALLBACK_CATEGORIES:
             st.markdown(
                 f"""
                 <div class="placeholder-art">
@@ -784,8 +794,8 @@ def render_block_safe(
 
         if wiki:
             if label == "Musique":
-                btn_label = "🎧 Ecouter (YouTube Music)"
-                query = urllib.parse.quote(f"{auteur} {titre}")
+                btn_label: str = "🎧 Ecouter (YouTube Music)"
+                query: str = urllib.parse.quote(f"{auteur} {titre}")
                 wiki = f"https://music.youtube.com/search?q={query}"
             else:
                 btn_label = "📖 Approfondir"
@@ -796,8 +806,16 @@ def render_block_safe(
 # EXPOSITION COMPLÈTE
 # ============================================================
 def display_exposition(target_date: datetime.date, context_id: str) -> None:
-    """Affiche l'exposition complete pour une date donnee."""
-    date_str = target_date.strftime("%Y-%m-%d")
+    """Affiche l'exposition complète pour une date donnée.
+
+    Utilise st.status() pour montrer la progression en temps réel
+    pendant la génération des 14 catégories.
+
+    Args:
+        target_date: Date de l'édition.
+        context_id: Identifiant de contexte (ex: "today", "archive").
+    """
+    date_str: str = target_date.strftime("%Y-%m-%d")
 
     st.markdown(
         f"<p style='text-align: center; color: #555; font-size: 1.4rem; "
@@ -807,36 +825,38 @@ def display_exposition(target_date: datetime.date, context_id: str) -> None:
     )
 
     # Cache : l'edition existe-t-elle deja en base ?
-    edition_cache = db.get_edition(date_str)
+    edition_cache: dict[str, Any] | None = db.get_edition(date_str)
 
     if edition_cache:
-        quote = edition_cache.get("quote", {})
-        art = edition_cache.get("art", {})
-        blocks_data = edition_cache.get("blocks", {})
+        quote: dict[str, Any] = edition_cache.get("quote", {})
+        art: dict[str, Any] = edition_cache.get("art", {})
+        blocks_data: dict[str, Any] = edition_cache.get("blocks", {})
     else:
-        with st.spinner("Les Muses preparent le banquet..."):
+        # Progression dynamique avec st.status()
+        with st.status(
+            "🏛️ Les Muses préparent le banquet...",
+            expanded=True,
+        ) as status:
+            st.write("📜 **Citation du jour** — en cours...")
             quote = fetch_quote_data(date_str)
-            art = get_art_safe(date_str)
+            st.write("✅ Citation du jour — prête")
 
-            categories = [
-                ("Poesie", "#c5a059", "📜"),
-                ("Litterature", "#800020", "📚"),
-                ("Musique", "#2b2b2b", "🎵"),
-                ("Sciences", "#4a6b5d", "🌍"),
-                ("Philosophie", "#800020", "🧠"),
-                ("Cinema", "#1a1a1a", "🎬"),
-                ("Architecture", "#555555", "🏛️"),
-                ("Mythologie", "#c5a059", "⚡"),
-                ("Gastronomie", "#800020", "🍷"),
-                ("Sculpture", "#696969", "🗿"),
-                ("Arts de la scene", "#8B0000", "🎭"),
-                ("Photographie", "#2F4F4F", "📷"),
-                ("Bande dessinee", "#B8860B", "🖋️"),
-                ("Jeu video", "#2E8B57", "🎮"),
-            ]
+            st.write("🖼️ **Beaux-Arts (MET Museum)** — en cours...")
+            art = get_art_safe(date_str)
+            st.write("✅ Beaux-Arts — prêt")
+
             blocks_data = {}
-            for name, _color, _icon in categories:
+            total: int = len(CATEGORIES)
+            for idx, (name, _color, _icon) in enumerate(CATEGORIES, start=1):
+                st.write(f"⏳ **{name}** ({idx}/{total}) — en cours...")
                 blocks_data[name] = get_content_item(name, date_str)
+                st.write(f"✅ **{name}** ({idx}/{total}) — prête")
+
+            status.update(
+                label="🎉 Le banquet est servi ! Les Muses ont parlé.",
+                state="complete",
+                expanded=False,
+            )
 
             # Sauvegarder en cache pour les lectures futures
             db.save_edition(
@@ -855,26 +875,68 @@ def display_exposition(target_date: datetime.date, context_id: str) -> None:
     # Beaux-Arts
     render_block_safe("🖼️", "Beaux-Arts", art, date_str, context_id, color="#800020")
 
-    # 14 categories
-    display_categories = [
-        ("Poesie", "#c5a059", "📜"),
-        ("Litterature", "#800020", "📚"),
-        ("Musique", "#2b2b2b", "🎵"),
-        ("Sciences", "#4a6b5d", "🌍"),
-        ("Philosophie", "#800020", "🧠"),
-        ("Cinema", "#1a1a1a", "🎬"),
-        ("Architecture", "#555555", "🏛️"),
-        ("Mythologie", "#c5a059", "⚡"),
-        ("Gastronomie", "#800020", "🍷"),
-        ("Sculpture", "#696969", "🗿"),
-        ("Arts de la scene", "#8B0000", "🎭"),
-        ("Photographie", "#2F4F4F", "📷"),
-        ("Bande dessinee", "#B8860B", "🖋️"),
-        ("Jeu video", "#2E8B57", "🎮"),
-    ]
-    for name, color, icon in display_categories:
+    # 14 catégories
+    for name, color, icon in CATEGORIES:
         data = blocks_data.get(name, {})
         render_block_safe(icon, name, data, date_str, context_id, color)
+
+
+# ============================================================
+# BOUTON PARTAGE
+# ============================================================
+def _render_share_button(target_date: datetime.date) -> None:
+    """Affiche un bouton de partage pour l'édition du jour.
+
+    Utilise la Web Share API (navigator.share) sur mobile,
+    ou copie le lien dans le presse-papier sur desktop.
+
+    Args:
+        target_date: Date de l'édition à partager.
+    """
+    date_str: str = target_date.strftime("%Y-%m-%d")
+    share_text: str = (
+        f"🏛️ Le Banquet des Muses — Édition du {date_str}\n\n"
+        f"Découvre l'exposition culturelle du jour : "
+        f"poésie, littérature, musique, philosophie et bien plus !\n\n"
+        f"📜 « {st.session_state.get('current_quote', 'La culture est le seul bien qui s\'accroît quand on le partage.')} »"
+    )
+
+    # JavaScript pour Web Share API avec fallback clipboard
+    share_js: str = f"""
+    <div style="text-align: center; margin: 30px 0 10px 0;">
+        <button onclick="shareEdition()" style="
+            background: none; border: 1px solid #800020; border-radius: 4px;
+            padding: 12px 30px; font-family: 'Cinzel', serif;
+            font-size: 1rem; color: #800020; cursor: pointer;
+            transition: all 0.3s ease;
+        " onmouseover="this.style.background='#800020'; this.style.color='#fdfbf7';"
+         onmouseout="this.style.background='none'; this.style.color='#800020';">
+            📤 Partager cette édition
+        </button>
+    </div>
+    <script>
+    function shareEdition() {{
+        const text = `{share_text}`;
+        if (navigator.share) {{
+            navigator.share({{
+                title: 'Le Banquet des Muses',
+                text: text,
+                url: window.location.href,
+            }}).catch(() => {{}});
+        }} else {{
+            navigator.clipboard.writeText(text + '\\n' + window.location.href)
+                .then(() => {{
+                    const btn = event.target;
+                    const orig = btn.textContent;
+                    btn.textContent = '✅ Lien copié !';
+                    setTimeout(() => {{ btn.textContent = orig; }}, 2000);
+                }})
+                .catch(() => {{}});
+        }}
+    }}
+    </script>
+    """
+    st.markdown(share_js, unsafe_allow_html=True)
 
 
 # ============================================================
@@ -886,12 +948,14 @@ t1, t2, t3 = st.tabs(["✨ Aujourd'hui", "📅 Archives", "⭐ Favoris"])
 
 # Onglet 1 : Aujourd'hui
 with t1:
-    display_exposition(datetime.date.today(), context_id="today")
+    today: datetime.date = datetime.date.today()
+    display_exposition(today, context_id="today")
+    _render_share_button(today)
 
 # Onglet 2 : Archives
 with t2:
-    yesterday = datetime.date.today() - datetime.timedelta(days=1)
-    d = st.date_input(
+    yesterday: datetime.date = datetime.date.today() - datetime.timedelta(days=1)
+    d: datetime.date = st.date_input(
         "Choisissez une date :",
         value=yesterday,
         max_value=datetime.date.today(),
@@ -908,8 +972,8 @@ with t3:
         "du serveur !"
     )
 
-    prefs = db.get_preferences()
-    liked = [p for p in prefs if p.get("liked")]
+    prefs: list[dict[str, Any]] = db.get_preferences()
+    liked: list[dict[str, Any]] = [p for p in prefs if p.get("liked")]
 
     if not liked:
         st.info(
@@ -925,3 +989,4 @@ with t3:
                     f"*({p.get('author', '?')})*"
                 )
                 st.caption(f"Sauvegarde le {p.get('date_str', '?')}")
+
