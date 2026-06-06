@@ -181,10 +181,70 @@ db = SupabaseClient()
 
 
 # ============================================================
-# HELPER JSON
+# HELPER JSON — Moteur de Parsing Ultra-Robuste
 # ============================================================
+def _sanitize_json_string(raw: str) -> str:
+    """Nettoie et répare une chaîne JSON malformée provenant d'un LLM.
+
+    Gère les problèmes courants :
+    - Blocs de code markdown ```json ... ```
+    - Retours à la ligne non échappés dans les chaînes
+    - Guillemets doubles orphelins/imbriqués dans les valeurs texte
+    - Caractères de contrôle invalides
+    - Virgules trailing avant }
+
+    Args:
+        raw: Chaîne brute potentiellement contenant du JSON malformé.
+
+    Returns:
+        Chaîne nettoyée prête pour json.loads().
+    """
+    text = raw.strip()
+
+    # 1. Suppression des blocs de code markdown
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\n?```\s*$", "", text)
+
+    # 2. Extraction du premier objet JSON si du texte l'entoure
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        text = match.group(0)
+
+    # 3. Suppression des caractères de contrôle (sauf \n, \t, \r légitimes)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+
+    # 4. Réparation des virgules trailing avant } ou ]
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
+
+    # 5. Tentative de réparation des guillemets doubles non échappés
+    #    dans les valeurs de chaînes (pattern: "valeur avec "mot" interne")
+    #    On utilise une approche conservative : on ne touche qu'aux cas
+    #    où un guillemet apparaît après un caractère non-échappement
+    #    dans une valeur string.
+    def _fix_nested_quotes(match_obj: re.Match[str]) -> str:
+        key: str = match_obj.group(1)
+        value: str = match_obj.group(2)
+        # Échappe les guillemets doubles dans la valeur
+        fixed_value: str = value.replace('"', '\\"')
+        return f'"{key}": "{fixed_value}"'
+
+    # Pattern: "key": "value with possible "nested" quotes"
+    text = re.sub(
+        r'"(?P<key>[^"]+)":\s*"(?P<value>.*?)"(?=\s*[,}\]])',
+        _fix_nested_quotes,
+        text,
+        flags=re.DOTALL,
+    )
+
+    return text
+
+
 def extract_json(text: str) -> dict[str, Any]:
-    """Extrait le premier objet JSON d'une chaîne de caractères.
+    """Extrait et parse le premier objet JSON d'une chaîne de caractères.
+
+    Utilise un pipeline de sanitization robuste pour gérer les sorties
+    malformées des LLMs (DeepSeek, etc.) : blocs markdown, retours à la
+    ligne non échappés, guillemets orphelins, caractères de contrôle.
 
     Args:
         text: Chaîne contenant potentiellement du JSON.
@@ -193,15 +253,47 @@ def extract_json(text: str) -> dict[str, Any]:
         Dictionnaire parsé.
 
     Raises:
-        ValueError: Si le JSON est invalide ou introuvable.
+        ValueError: Si le JSON est irrécupérable après sanitization.
     """
+    if not text or not text.strip():
+        raise ValueError("Chaîne JSON vide ou None")
+
+    errors: list[str] = []
+
+    # Tentative 1 : Parsing direct
     try:
         match = re.search(r"\{.*\}", text.strip(), re.DOTALL)
         if match:
             return json.loads(match.group(0))
         return json.loads(text)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        raise ValueError(f"Erreur de parsing JSON : {exc}") from exc
+        errors.append(f"direct: {exc}")
+
+    # Tentative 2 : Après sanitization
+    try:
+        sanitized: str = _sanitize_json_string(text)
+        return json.loads(sanitized)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        errors.append(f"sanitized: {exc}")
+
+    # Tentative 3 : Dernière chance — réparation agressive
+    try:
+        # Supprime tous les guillemets non échappés problématiques
+        aggressive: str = re.sub(
+            r'(?<!\\)"(?=(?:[^"]*"[^"]*")*[^"]*$)',
+            "'",
+            text,
+        )
+        match = re.search(r"\{.*\}", aggressive, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return json.loads(aggressive)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        errors.append(f"aggressive: {exc}")
+
+    raise ValueError(
+        f"Erreur de parsing JSON après 3 tentatives : {' | '.join(errors)}"
+    )
 
 
 # ============================================================
@@ -316,18 +408,25 @@ def fetch_image_cascade(res_dict: dict[str, Any], category: str) -> Optional[str
     queries: list[str] = [str(q) for q in queries_raw if q and len(str(q)) > 2]
 
     # 1. Wikipédia (langue primaire puis secondaire)
-    for q in queries:
-        try:
-            img = get_wiki_image_secure(q, primary_lang)
-            if img:
-                return img
-            secondary = "fr" if primary_lang == "en" else "en"
-            img = get_wiki_image_secure(q, secondary)
-            if img:
-                return img
-        except (requests.RequestException, json.JSONDecodeError):
-            logger.warning("Échec récupération image Wikipédia pour : %s", q)
-            continue
+    try:
+        for q in queries:
+            try:
+                img = get_wiki_image_secure(q, primary_lang)
+                if img:
+                    return img
+                secondary = "fr" if primary_lang == "en" else "en"
+                img = get_wiki_image_secure(q, secondary)
+                if img:
+                    return img
+            except (requests.RequestException, json.JSONDecodeError):
+                logger.warning("Échec récupération image Wikipédia pour : %s", q)
+                continue
+    except Exception:
+        logger.exception(
+            "Crash réseau dans fetch_image_cascade — toutes les tentatives "
+            "Wikipédia ont échoué (timeout, RetryError, etc.). "
+            "Bascule vers fallback ou placeholder."
+        )
 
     # 2. Règle stricte : Architecture & Sculpture → pas d'IA
     if category in NO_AI_FALLBACK_CATEGORIES:
@@ -513,7 +612,10 @@ def ask_deepseek(prompt: str, cache_salt: str) -> dict[str, Any]:
 # ============================================================
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_quote_data(date_str: str) -> dict[str, Any]:
-    """Génère la citation du jour avec évitement des auteurs récents.
+    """Génère la citation du jour avec évitement des textes et auteurs récents.
+
+    La colonne 'title' stocke le texte intégral de la citation (UNIQUE),
+    la colonne 'author' stocke le nom de l'auteur.
 
     Args:
         date_str: Date au format "YYYY-MM-DD".
@@ -521,22 +623,47 @@ def fetch_quote_data(date_str: str) -> dict[str, Any]:
     Returns:
         Dictionnaire contenant "citation" et "auteur", ou {"erreur": True}.
     """
-    seen_authors: list[str] = db.get_seen_titles("Citation")
-    avoid_clause: str = ""
-    if seen_authors:
-        recent: list[str] = seen_authors[-15:]
-        avoid_clause = (
-            " INTERDICTION ABSOLUE de proposer un auteur parmi les suivants "
-            f"(deja cites recemment) : {', '.join(recent)}."
+    # Récupération des textes de citations déjà vus (dans title)
+    seen_texts: list[str] = db.get_seen_titles("Citation")
+    # Récupération des auteurs récents (dans author)
+    seen_authors: list[str] = db.get_seen_authors("Citation")
+
+    avoid_parts: list[str] = []
+
+    if seen_texts:
+        recent_texts: list[str] = seen_texts[-30:]
+        avoid_parts.append(
+            "INTERDICTION ABSOLUE de recycler un texte connu en lui attribuant "
+            "un faux auteur. Voici les citations DEJA PUBLIEES (tu ne dois "
+            "en reproduire AUCUNE, meme partiellement) :\n"
+            + "\n".join(f"  - \"{t[:120]}{'...' if len(t)>120 else ''}\""
+                        for t in recent_texts)
         )
+
+    if seen_authors:
+        recent_authors: list[str] = seen_authors[-15:]
+        avoid_parts.append(
+            "INTERDICTION ABSOLUE de proposer un auteur parmi les suivants "
+            f"(deja cites recemment) : {', '.join(recent_authors)}."
+        )
+
+    avoid_clause: str = "\n\n".join(avoid_parts)
+    if avoid_clause:
+        avoid_clause = "\n\n" + avoid_clause
+
     prompt: str = (
         f"Donne une citation antique ou classique marquante, profonde et inspirante "
         f"pour l'edition du {date_str}.{avoid_clause}\n\n"
+        "REGLE D'INTEGRITE HISTORIQUE : Tu dois faire preuve d'une rigueur "
+        "historique absolue. INTERDICTION ABSOLUE d'attribuer une citation "
+        "celebre a quelqu'un d'autre que son veritable auteur. Chaque citation "
+        "doit etre authentique et verifiable.\n\n"
         'JSON attendu : {"citation": "...", "auteur": "..."}'
     )
     data: dict[str, Any] = ask_deepseek(prompt, f"{date_str}_quote")
-    if data and data.get("auteur"):
-        db.add_to_seen("Citation", data["auteur"], date_seen=date_str)
+    if data and data.get("citation") and data.get("auteur"):
+        # Stocke le TEXTE dans title (UNIQUE) et l'AUTEUR dans author
+        db.add_to_seen("Citation", data["citation"], data["auteur"], date_seen=date_str)
     return data
 
 

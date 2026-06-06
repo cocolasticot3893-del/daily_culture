@@ -247,11 +247,18 @@ NORMALIZATION_RULES: dict[str, str] = {
 # ============================================================
 # CONFIGURATION DES RETRIES (tenacity)
 # ============================================================
-RETRY_CONFIG: dict = {
+RETRY_CONFIG: dict[str, int] = {
     "min_wait": 4,      # secondes
     "max_wait": 30,     # secondes
     "max_attempts": 3,
 }
+
+# ============================================================
+# CONFIGURATION DE RÉSILIENCE BASE DE DONNÉES
+# ============================================================
+DB_TIMEOUT: int = 8  # secondes — timeout unifié pour toutes les requêtes Supabase
+CIRCUIT_BREAKER_THRESHOLD: int = 3  # échecs consécutifs avant ouverture du circuit
+CIRCUIT_BREAKER_COOLDOWN: float = 30.0  # secondes avant tentative HALF_OPEN
 
 # ============================================================
 # SECRETS REQUIS
