@@ -442,9 +442,11 @@ def fetch_image_cascade(res_dict: dict[str, Any], category: str) -> Optional[str
 
     if category in ABSTRACT_CATEGORIES:
         ai_prompt: str = (
-            f"Cinematic oil painting style, dramatic lighting, museum quality, "
-            f"masterpiece elegant illustration of {clean_query}, {category} concept, "
-            f"highly detailed, art gallery aesthetics"
+            f"Oil painting on canvas, museum gallery masterpiece, "
+            f"allegorical illustration of {clean_query}, "
+            f"{category} concept, dramatic chiaroscuro lighting, "
+            f"highly detailed, classical art aesthetics, "
+            f"Louvre museum quality"
         )
     else:
         ai_prompt: str = (
@@ -566,6 +568,13 @@ def _call_deepseek(prompt: str) -> dict[str, Any]:
                     "HISTORIQUEMENT ATTRIBUÉES. Aucune invention. Si tu ne connais "
                     "pas d'oeuvre correspondant aux criteres, retourne "
                     '{"erreur": true}.\n\n'
+                    "REGLE ANTI-PLACEHOLDER POUR TOUTES LES CATEGORIES : "
+                    "Tu NE DOIS JAMAIS retourner les chaînes placeholder comme "
+                    "'Nom exact et REEL', 'Sculpteur historique VERITABLE', "
+                    "'Nom et prénom', 'Titre de l\\'oeuvre', ou toute variante "
+                    "descriptive. Si tu ne connais pas une information précise, "
+                    "utilise une chaîne vide '' ou retourne {'erreur': true}. "
+                    "Chaque valeur doit être un contenu RÉEL et SPÉCIFIQUE.\n\n"
                     "Reponds STRICTEMENT en JSON pur, sans texte avant ni apres."
                 ),
             },
@@ -990,6 +999,7 @@ def display_exposition(target_date: datetime.date, context_id: str) -> None:
                 date_str,
                 {"quote": quote, "art": art, "blocks": blocks_data},
             )
+            logger.info("✅ Cache Supabase généré avec succès pour %s", date_str)
 
     # Citation
     if quote and not quote.get("erreur"):
@@ -1093,11 +1103,18 @@ with t2:
 
 # Onglet 3 : Favoris
 with t3:
-    st.success(
-        "☁️ **Sauvegarde Cloud activee** &mdash; Vos favoris sont stockes "
-        "de maniere permanente sur Supabase. Ils survivent aux redemarrages "
-        "du serveur !"
-    )
+    if db._degraded:
+        st.warning(
+            "⚠️ **Mode Local** &mdash; Supabase est momentanément indisponible. "
+            "Vos favoris sont sauvegardés localement et seront synchronisés "
+            "dès le retour du cloud."
+        )
+    else:
+        st.success(
+            "☁️ **Sauvegarde Cloud activee** &mdash; Vos favoris sont stockes "
+            "de maniere permanente sur Supabase. Ils survivent aux redemarrages "
+            "du serveur !"
+        )
 
     prefs: list[dict[str, Any]] = db.get_preferences()
     liked: list[dict[str, Any]] = [p for p in prefs if p.get("liked")]

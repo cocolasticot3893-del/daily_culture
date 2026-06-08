@@ -38,7 +38,7 @@ ENGLISH_PRIMARY_CATEGORIES: set[str] = {
 NO_AI_FALLBACK_CATEGORIES: set[str] = {"Architecture", "Sculpture"}
 
 # Catégories abstraites avec prompt IA enrichi
-ABSTRACT_CATEGORIES: set[str] = {"Philosophie", "Mythologie", "Poésie"}
+ABSTRACT_CATEGORIES: set[str] = {"Philosophie", "Mythologie", "Poésie", "Sciences"}
 
 # ============================================================
 # FOCI QUOTIDIENS (sous-thèmes déterministes par date)
@@ -157,9 +157,10 @@ JSON_TEMPLATES: dict[str, str] = {
         '"analyse": "...", "lien_wiki": "...", "image_query": "Film Wikipedia"}'
     ),
     "Architecture": (
-        '{"titre": "Nom exact et REEL", "lieu": "...", "architecte": "...", '
+        '{"titre": "...", '
+        '"architecte": "...", '
         '"analyse": "...", "lien_wiki": "...", '
-        '"image_query": "Nom complet exact pour Wikipedia"}'
+        '"image_query": "Nom du monument, Architecte, Ville, Pays"}'
     ),
     "Mythologie": (
         '{"titre": "...", "origine": "...", '
@@ -170,10 +171,10 @@ JSON_TEMPLATES: dict[str, str] = {
         '"analyse": "...", "lien_wiki": "...", "image_query": "Plat"}'
     ),
     "Sculpture": (
-        '{"titre": "Nom exact et REEL", '
-        '"sculpteur": "Sculpteur historique VERITABLE", '
+        '{"titre": "...", '
+        '"sculpteur": "...", '
         '"analyse": "...", "lien_wiki": "...", '
-        '"image_query": "Nom de la sculpture Wikipedia"}'
+        '"image_query": "Titre de l\'oeuvre, Nom de l\'Artiste, Lieu de conservation"}'
     ),
     "Arts de la scène": (
         '{"titre": "...", "auteur": "...", '
