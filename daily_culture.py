@@ -180,6 +180,76 @@ DEEPSEEK_KEY: str = st.secrets["DEEPSEEK_API_KEY"]
 db = SupabaseClient()
 
 
+def trigger_silent_generation():
+    """
+    Point d'entrée silencieux activé via ?warmup=true.
+    Génère l'édition du jour sans aucun rendu UI et la stocke dans Supabase.
+    """
+    today = datetime.date.today().isoformat()
+    
+    # 1. Vérifier si l'édition existe déjà
+    existing = db.get_edition(today)
+    if existing:
+        logger.info(f"WARMUP: Édition du {today} déjà présente dans Supabase — rien à faire.")
+        return
+    
+    logger.info(f"WARMUP: Démarrage de la génération silencieuse pour le {today}...")
+    
+    edition = {"citation": None, "art": None, "categories": {}}
+    
+    # 2. Génération de la citation
+    try:
+        quote = fetch_quote_data(today)
+        if not quote.get("erreur"):
+            edition["citation"] = quote
+            logger.info(f"WARMUP: Citation générée — {quote.get('auteur', 'Inconnu')}")
+        else:
+            logger.warning("WARMUP: Échec génération citation.")
+    except Exception as e:
+        logger.error(f"WARMUP: Exception citation — {e}")
+    
+    # 3. Génération de l'œuvre d'art (MET)
+    try:
+        art = get_art_safe(today)
+        if not art.get("erreur"):
+            edition["art"] = art
+            logger.info(f"WARMUP: Œuvre MET générée — {art.get('titre', 'Inconnu')}")
+        else:
+            logger.warning("WARMUP: Échec génération œuvre MET.")
+    except Exception as e:
+        logger.error(f"WARMUP: Exception œuvre MET — {e}")
+    
+    # 4. Génération des 14 catégories (séquentiel, avec isolation par catégorie)
+    for category in CATEGORIES:
+        try:
+            item = get_content_item(category, today)
+            if not item.get("erreur"):
+                edition["categories"][category] = item
+                logger.info(f"WARMUP: Catégorie '{category}' générée.")
+            else:
+                logger.warning(f"WARMUP: Échec catégorie '{category}'.")
+        except Exception as e:
+            logger.error(f"WARMUP: Exception catégorie '{category}' — {e}")
+    
+    # 5. Sauvegarde dans Supabase
+    try:
+        success = db.save_edition(today, edition)
+        if success:
+            logger.info(f"WARMUP: Édition du {today} sauvegardée dans Supabase avec succès !")
+        else:
+            logger.error(f"WARMUP: Échec de sauvegarde Supabase pour le {today}.")
+    except Exception as e:
+        logger.error(f"WARMUP: Exception sauvegarde Supabase — {e}")
+
+
+# ==== Détection Warmup URL (préchauffage nocturne) ====
+if st.query_params.get("warmup") == "true":
+    logger.info("WARMUP: Paramètre d'URL détecté — exécution silencieuse...")
+    trigger_silent_generation()
+    logger.info("WARMUP: Génération terminée — arrêt du script.")
+    st.stop()
+
+
 # ============================================================
 # HELPER JSON — Moteur de Parsing Ultra-Robuste
 # ============================================================
