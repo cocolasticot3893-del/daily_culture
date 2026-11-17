@@ -97,7 +97,48 @@ main.container {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+}
+
+.trio-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.trio-tab {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 8px;
+  text-align: left;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trio-tab.active {
+  border-color: var(--gold);
+  background: var(--gold-soft);
+  color: var(--text-main);
+}
+
+.trio-tab-num {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.trio-tab-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 select, input[type="text"], input[type="password"] {
@@ -156,6 +197,34 @@ button:disabled {
   border-radius: var(--radius);
   padding: 18px;
   margin-bottom: 16px;
+}
+
+.hero-figure {
+  margin: 0 0 16px 0;
+  border-radius: 11px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #0d1017;
+}
+
+.hero-figure img {
+  display: block;
+  width: 100%;
+  max-height: 300px;
+  object-fit: cover;
+  background: #0d1017;
+}
+
+.hero-figcaption {
+  padding: 8px 12px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
 }
 
 .meta-row {
@@ -312,24 +381,45 @@ blockquote.quote-box footer {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 14px;
+  padding: 12px;
   margin-bottom: 10px;
   cursor: pointer;
+  display: flex;
+  gap: 12px;
+  align-items: center;
 }
 
 .list-item:hover {
   border-color: var(--gold);
 }
 
+.list-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.list-body {
+  min-width: 0;
+  flex: 1;
+}
+
 .list-item-title {
   font-weight: 700;
-  font-size: 1rem;
-  margin: 4px 0;
+  font-size: 0.98rem;
+  margin: 3px 0;
 }
 
 .list-item-sub {
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .form-group {

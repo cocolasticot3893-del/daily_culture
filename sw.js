@@ -1,4 +1,4 @@
-const CACHE_NAME = "daily-culture-v1.0.3";
+const CACHE_NAME = "daily-culture-v1.1.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -31,7 +31,13 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (url.hostname.includes("generativelanguage.googleapis.com")) return;
+  if (
+    url.hostname.includes("generativelanguage.googleapis.com") ||
+    url.hostname.includes("wikipedia.org") ||
+    url.hostname.includes("wikimedia.org")
+  ) {
+    return;
+  }
   if (event.request.method !== "GET") return;
 
   event.respondWith(

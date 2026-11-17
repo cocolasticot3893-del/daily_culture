@@ -111,6 +111,8 @@ async function deleteEntryById(id) {
   });
 }
 
+/* ---------------- DISCOVERY DYNAMIQUE DES MODELES GEMINI ---------------- */
+
 function getSettings() {
   return {
     apiKey: (localStorage.getItem(SETTINGS_KEYS.API_KEY) || "").trim(),
@@ -212,6 +214,61 @@ async function syncGeminiModels(forceRefresh = false) {
   }
 }
 
+/* ---------------- RECUPERATION D'IMAGES ENCYCLOPEDIQUES (WIKIMEDIA / WIKIPEDIA) ---------------- */
+
+async function queryWikipediaImage(lang, searchQuery) {
+  if (!searchQuery) return null;
+  const endpoint = `https://${lang}.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
+    searchQuery
+  )}&gsrlimit=4&prop=pageimages|info&inprop=url&pithumbsize=900&format=json&origin=*`;
+
+  try {
+    const resp = await fetch(endpoint);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const pages = Object.values(data?.query?.pages || {}).sort((a, b) => (a.index || 99) - (b.index || 99));
+    for (const p of pages) {
+      if (p?.thumbnail?.source) {
+        const thumb = p.thumbnail.source;
+        // Exclure les icones generiques de portail/bandeau Wikipedia
+        if (thumb.includes("Icon_") || thumb.includes("Question_book") || thumb.includes("Flag_of_")) {
+          continue;
+        }
+        return {
+          imageUrl: thumb,
+          pageUrl: p.fullurl || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(p.title)}`,
+          sourceTitle: p.title || searchQuery
+        };
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
+async function resolveSubjectIllustration(primaryQuery, fallbackQuery) {
+  // 1. Recherche FR sur requete ciblee
+  let hit = await queryWikipediaImage("fr", primaryQuery);
+  if (hit) return hit;
+
+  // 2. Recherche EN (souvent plus riche sur les oeuvres d'art, architectures et concepts internationaux)
+  hit = await queryWikipediaImage("en", primaryQuery);
+  if (hit) return hit;
+
+  // 3. Repli sur le titre ou l'oeuvre pivot
+  if (fallbackQuery && fallbackQuery !== primaryQuery) {
+    hit = await queryWikipediaImage("fr", fallbackQuery);
+    if (hit) return hit;
+    hit = await queryWikipediaImage("en", fallbackQuery);
+    if (hit) return hit;
+  }
+
+  return null;
+}
+
+/* ---------------- UTILITAIRES ---------------- */
+
 function showToast(message) {
   const toast = document.getElementById("toast");
   toast.textContent = message;
@@ -252,22 +309,36 @@ function computeStreak(entries) {
   return streak;
 }
 
-function selectWeightedCategory(entries) {
+/* Tirage pondere sans remise de K categories parmi les 14 */
+function selectWeightedCategories(entries, count = 3) {
   const counts = {};
   for (const cat of CATEGORIES) counts[cat.id] = 0;
   for (const item of entries) {
     if (counts[item.categoryId] !== undefined) counts[item.categoryId]++;
   }
 
-  const weights = CATEGORIES.map((cat) => 1 / (1 + Math.pow(counts[cat.id] || 0, 2)));
-  const totalWeight = weights.reduce((acc, w) => acc + w, 0);
-  let r = Math.random() * totalWeight;
-  for (let i = 0; i < CATEGORIES.length; i++) {
-    r -= weights[i];
-    if (r <= 0) return CATEGORIES[i];
+  const pool = [...CATEGORIES];
+  const selected = [];
+
+  for (let k = 0; k < count && pool.length > 0; k++) {
+    const weights = pool.map((cat) => 1 / (1 + Math.pow(counts[cat.id] || 0, 2)));
+    const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+    let r = Math.random() * totalWeight;
+    let chosenIdx = 0;
+    for (let i = 0; i < pool.length; i++) {
+      r -= weights[i];
+      if (r <= 0) {
+        chosenIdx = i;
+        break;
+      }
+    }
+    selected.push(pool[chosenIdx]);
+    pool.splice(chosenIdx, 1);
   }
-  return CATEGORIES[0];
+  return selected;
 }
+
+/* ---------------- APPEL API GEMINI AVEC FALLBACK ---------------- */
 
 async function callGeminiGenerate(modelId, apiKey, prompt, responseSchema) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
@@ -302,21 +373,21 @@ async function callGeminiGenerate(modelId, apiKey, prompt, responseSchema) {
   return JSON.parse(rawText);
 }
 
-async function generateCulturalEntry(categoryObj) {
+async function generateCulturalEntry(categoryObj, extraExcludedTitles = []) {
   const settings = getSettings();
   if (!settings.apiKey) {
     throw new Error("Cle API Gemini manquante. Renseignez-la dans l'onglet Config.");
   }
 
-  const recentTitles = allEntries.slice(0, 35).map((e) => e.title);
+  const recentTitles = [...allEntries.slice(0, 35).map((e) => e.title), ...extraExcludedTitles];
   const exclusionClause = recentTitles.length
     ? `Sujets deja traites a exclure strictement : ${recentTitles.join(" | ")}.`
     : "Aucun sujet precedent.";
 
   const depthInstruction =
     settings.depth === "deep"
-      ? "Redige une analyse approfondie, nuancee et academique (environ 130 a 180 mots par section principale), en explicitant les termes techniques rares entre parentheses."
-      : "Redige une synthese dense, incisive et sans remplissage (environ 70 a 100 mots par section principale), en explicitant les termes techniques rares entre parentheses.";
+      ? "Format lecture 6 minutes : redige une analyse approfondie, nuancee et academique (environ 150 a 200 mots par section principale), en explicitant les termes techniques rares entre parentheses."
+      : "Format lecture 3 minutes : redige une synthese dense, incisive et sans remplissage (environ 70 a 100 mots par section principale), en explicitant les termes techniques rares entre parentheses.";
 
   const prompt = `Tu es un erudit, historien des idees et critique d'art de niveau universitaire.
 Genere une fiche de culture generale pointue dans le domaine : "${categoryObj.name}" (angle : ${categoryObj.angle}).
@@ -331,6 +402,14 @@ Langue : francais soutenu, precis et clair.`;
       title: { type: "STRING" },
       hook: { type: "STRING" },
       era: { type: "STRING" },
+      imageSearchQuery: {
+        type: "STRING",
+        description: "Requete courte (2 a 4 mots-cles exacts, ex: nom d'oeuvre ou d'auteur celebre) pour trouver une illustration sur Wikipedia/Wikimedia"
+      },
+      imageCaption: {
+        type: "STRING",
+        description: "Legende documentaire de l'oeuvre, du monument ou de la figure associee"
+      },
       thesis: { type: "STRING" },
       context: { type: "STRING" },
       keyWorkAnalysis: { type: "STRING" },
@@ -361,8 +440,9 @@ Langue : francais soutenu, precis et clair.`;
       }
     },
     required: [
-      "title", "hook", "era", "thesis", "context", "keyWorkAnalysis",
-      "contemporaryResonance", "quote", "quoteAuthor", "furtherReading", "quiz", "flashcards"
+      "title", "hook", "era", "imageSearchQuery", "imageCaption",
+      "thesis", "context", "keyWorkAnalysis", "contemporaryResonance",
+      "quote", "quoteAuthor", "furtherReading", "quiz", "flashcards"
     ]
   };
 
@@ -382,20 +462,27 @@ Langue : francais soutenu, precis et clair.`;
     }
   }
 
+  const media = await resolveSubjectIllustration(parsed.imageSearchQuery, parsed.title);
   const now = Date.now();
+
   return {
     id: `dc_${now}_${Math.random().toString(36).slice(2, 7)}`,
     dateKey: getTodayDateString(),
     createdAt: now,
+    readingDuration: settings.depth === "deep" ? "6 min" : "3 min",
     categoryId: categoryObj.id,
     categoryName: categoryObj.name,
     categoryIcon: categoryObj.icon,
     modelUsed: usedModel,
+    imageUrl: media?.imageUrl || null,
+    imageSourceUrl: media?.pageUrl || null,
     favorite: false,
     quizAnsweredIndex: null,
     ...parsed
   };
 }
+
+/* ---------------- EXPORTS ANKI & OBSIDIAN ---------------- */
 
 function buildAnkiTsv(entriesList) {
   const rows = [];
@@ -416,17 +503,20 @@ function buildObsidianMarkdown(entry) {
     .map((fc) => `- **Q :** ${fc.front}\n  - **R :** ${fc.back}`)
     .join("\n");
 
+  const imgLine = entry.imageUrl ? `\n![${entry.imageCaption || entry.title}](${entry.imageUrl})\n` : "";
+
   return `---
 title: "${entry.title.replace(/"/g, '\\"')}"
 category: "${entry.categoryName}"
 era: "${entry.era}"
+duration: "${entry.readingDuration || "3 min"}"
 date: ${entry.dateKey}
 tags: [daily-culture, ${entry.categoryId}]
 ---
 
 # ${entry.title}
 > *${entry.hook}*
-
+${imgLine}
 ## These & Essence
 ${entry.thesis}
 
@@ -460,16 +550,59 @@ function triggerFileDownload(filename, content, mimeType) {
   URL.revokeObjectURL(url);
 }
 
+/* ---------------- RENDU INTERFACE ---------------- */
+
+function renderTrioTabs() {
+  const tabsEl = document.getElementById("trioTabs");
+  const todayStr = getTodayDateString();
+  const todaysEntries = allEntries
+    .filter((e) => e.dateKey === todayStr)
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  if (todaysEntries.length <= 1) {
+    tabsEl.style.display = "none";
+    tabsEl.innerHTML = "";
+    return;
+  }
+
+  tabsEl.style.display = "grid";
+  tabsEl.style.gridTemplateColumns = `repeat(${Math.min(todaysEntries.length, 3)}, 1fr)`;
+
+  tabsEl.innerHTML = todaysEntries
+    .slice(-3)
+    .map((item, idx) => {
+      const isActive = currentEntry && currentEntry.id === item.id;
+      return `
+        <button type="button" class="trio-tab ${isActive ? "active" : ""}" data-trio-id="${item.id}">
+          <span class="trio-tab-num">Sujet ${idx + 1} &#8226; ${escapeHtml(item.categoryIcon)}</span>
+          <span class="trio-tab-title">${escapeHtml(item.title)}</span>
+        </button>`;
+    })
+    .join("");
+
+  tabsEl.querySelectorAll("[data-trio-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-trio-id");
+      const found = allEntries.find((e) => e.id === id);
+      if (found) {
+        currentEntry = found;
+        renderTrioTabs();
+        renderEntryCard(found);
+      }
+    });
+  });
+}
+
 function renderEntryCard(entry) {
   const container = document.getElementById("todayContent");
   if (!entry) {
     container.innerHTML = `
       <div class="card" style="text-align:center; padding:32px 18px;">
-        <p style="font-size:1.05rem; font-weight:600; margin-bottom:8px;">Aucune fiche chargee</p>
+        <p style="font-size:1.05rem; font-weight:600; margin-bottom:8px;">Menu du jour vierge</p>
         <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:18px;">
-          Selectionnez un domaine ou lancez un tirage equilibre propulse par Gemini.
+          Generez votre selection quotidienne de 3 sujets illustres parmi les 14 domaines culturels.
         </p>
-        <button class="btn-primary" onclick="document.getElementById('generateBtn').click()">Generer ma fiche culturelle</button>
+        <button class="btn-primary" onclick="document.getElementById('generateBtn').click()">Generer les 3 sujets du jour</button>
       </div>`;
     return;
   }
@@ -498,15 +631,32 @@ function renderEntryCard(entry) {
     )
     .join("");
 
+  const heroImageHtml = entry.imageUrl
+    ? `
+      <figure class="hero-figure">
+        <img src="${escapeHtml(entry.imageUrl)}" alt="${escapeHtml(entry.imageCaption || entry.title)}" loading="lazy" onerror="this.parentElement.style.display='none'" />
+        <figcaption class="hero-figcaption">
+          <span>${escapeHtml(entry.imageCaption || entry.title)}</span>
+          ${
+            entry.imageSourceUrl
+              ? `<a href="${escapeHtml(entry.imageSourceUrl)}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; flex-shrink:0;">Source &#8599;</a>`
+              : ""
+          }
+        </figcaption>
+      </figure>`
+    : "";
+
   container.innerHTML = `
     <article class="card">
       <div class="meta-row">
         <span class="badge">${escapeHtml(entry.categoryIcon)} ${escapeHtml(entry.categoryName)}</span>
-        <span class="era-tag">${escapeHtml(entry.era)} &#8226; ${escapeHtml(entry.dateKey)}</span>
+        <span class="era-tag">${escapeHtml(entry.era)} &#8226; ${escapeHtml(entry.readingDuration || "3 min")}</span>
       </div>
 
       <h1 class="article-title">${escapeHtml(entry.title)}</h1>
       <p class="article-hook">${escapeHtml(entry.hook)}</p>
+
+      ${heroImageHtml}
 
       <div class="section-block">
         <div class="section-label">These &amp; Essence</div>
@@ -608,6 +758,24 @@ function renderEntryCard(entry) {
   });
 }
 
+function buildListItemHtml(item) {
+  const thumbHtml = item.imageUrl
+    ? `<img class="list-thumb" src="${escapeHtml(item.imageUrl)}" alt="" loading="lazy" onerror="this.style.display='none'" />`
+    : "";
+  return `
+    <div class="list-item" data-open-id="${item.id}">
+      ${thumbHtml}
+      <div class="list-body">
+        <div class="meta-row" style="margin-bottom:3px;">
+          <span class="badge">${escapeHtml(item.categoryIcon)} ${escapeHtml(item.categoryName)}</span>
+          <span class="era-tag">${escapeHtml(item.dateKey)} ${item.favorite ? "&#9733;" : ""}</span>
+        </div>
+        <div class="list-item-title">${escapeHtml(item.title)}</div>
+        <div class="list-item-sub">${escapeHtml(item.hook)}</div>
+      </div>
+    </div>`;
+}
+
 function renderLists() {
   const query = (document.getElementById("searchInput").value || "").toLowerCase().trim();
   const catFilter = document.getElementById("archiveCategoryFilter").value;
@@ -623,37 +791,13 @@ function renderLists() {
   const archivesContainer = document.getElementById("archivesList");
   archivesContainer.innerHTML = !filtered.length
     ? `<div class="card" style="text-align:center; color:var(--text-muted);">Aucune fiche correspondante.</div>`
-    : filtered
-        .map(
-          (item) => `
-        <div class="list-item" data-open-id="${item.id}">
-          <div class="meta-row" style="margin-bottom:4px;">
-            <span class="badge">${escapeHtml(item.categoryIcon)} ${escapeHtml(item.categoryName)}</span>
-            <span class="era-tag">${escapeHtml(item.dateKey)} ${item.favorite ? "&#9733;" : ""}</span>
-          </div>
-          <div class="list-item-title">${escapeHtml(item.title)}</div>
-          <div class="list-item-sub">${escapeHtml(item.hook)}</div>
-        </div>`
-        )
-        .join("");
+    : filtered.map(buildListItemHtml).join("");
 
   const favs = allEntries.filter((e) => e.favorite);
   const favContainer = document.getElementById("favoritesList");
   favContainer.innerHTML = !favs.length
     ? `<div class="card" style="text-align:center; color:var(--text-muted);">Aucun favori enregistre.</div>`
-    : favs
-        .map(
-          (item) => `
-        <div class="list-item" data-open-id="${item.id}">
-          <div class="meta-row" style="margin-bottom:4px;">
-            <span class="badge">${escapeHtml(item.categoryIcon)} ${escapeHtml(item.categoryName)}</span>
-            <span class="era-tag">${escapeHtml(item.dateKey)} &#9733;</span>
-          </div>
-          <div class="list-item-title">${escapeHtml(item.title)}</div>
-          <div class="list-item-sub">${escapeHtml(item.hook)}</div>
-        </div>`
-        )
-        .join("");
+    : favs.map(buildListItemHtml).join("");
 
   document.querySelectorAll("[data-open-id]").forEach((el) => {
     el.addEventListener("click", () => {
@@ -661,6 +805,7 @@ function renderLists() {
       const found = allEntries.find((e) => e.id === id);
       if (found) {
         currentEntry = found;
+        renderTrioTabs();
         renderEntryCard(found);
         switchView("today");
         window.scrollTo({ top: 0, behavior: "smooth" });
@@ -686,6 +831,7 @@ async function refreshState(preferredId = null) {
     currentEntry = allEntries[0];
   }
 
+  renderTrioTabs();
   renderEntryCard(currentEntry);
   renderLists();
 }
@@ -704,7 +850,7 @@ function populateCategorySelectors() {
   for (const cat of CATEGORIES) {
     const opt1 = document.createElement("option");
     opt1.value = cat.id;
-    opt1.textContent = `${cat.icon} ${cat.name}`;
+    opt1.textContent = `+ 1 fiche : ${cat.icon} ${cat.name}`;
     catSelect.appendChild(opt1);
 
     const opt2 = document.createElement("option");
@@ -731,28 +877,45 @@ document.addEventListener("DOMContentLoaded", async () => {
     btn.addEventListener("click", () => switchView(btn.getAttribute("data-target")));
   });
 
+  document.getElementById("categorySelect").addEventListener("change", (e) => {
+    const btn = document.getElementById("generateBtn");
+    btn.textContent = e.target.value === "TRIO" ? "G\u00e9n\u00e9rer (3)" : "G\u00e9n\u00e9rer (1)";
+  });
+
   document.getElementById("generateBtn").addEventListener("click", async () => {
     const btn = document.getElementById("generateBtn");
     const container = document.getElementById("todayContent");
     const chosenId = document.getElementById("categorySelect").value;
-    const categoryObj =
-      chosenId === "AUTO"
-        ? selectWeightedCategory(allEntries)
-        : CATEGORIES.find((c) => c.id === chosenId) || CATEGORIES[0];
+    const isTrio = chosenId === "TRIO";
+
+    const targetCategories = isTrio
+      ? selectWeightedCategories(allEntries, 3)
+      : [CATEGORIES.find((c) => c.id === chosenId) || CATEGORIES[0]];
 
     btn.disabled = true;
+    document.getElementById("trioTabs").style.display = "none";
+
+    const domainLabels = targetCategories.map((c) => `${c.icon} ${c.name}`).join(" • ");
     container.innerHTML = `
       <div class="card loader">
         <div class="spinner"></div>
-        <div style="font-weight:600; color:var(--text-main);">Synthese en cours via Gemini...</div>
-        <div style="font-size:0.84rem; margin-top:4px;">Domaine : ${escapeHtml(categoryObj.name)}</div>
+        <div style="font-weight:600; color:var(--text-main);">
+          ${isTrio ? "Composition du menu du jour (3 sujets illustres)..." : "Synthese illustree en cours..."}
+        </div>
+        <div style="font-size:0.82rem; margin-top:6px; color:var(--gold);">${escapeHtml(domainLabels)}</div>
       </div>`;
 
     try {
-      const entry = await generateCulturalEntry(categoryObj);
-      await saveEntry(entry);
-      await refreshState(entry.id);
-      showToast("Nouvelle fiche generee");
+      const results = await Promise.all(
+        targetCategories.map((cat) => generateCulturalEntry(cat))
+      );
+
+      for (const item of results) {
+        await saveEntry(item);
+      }
+
+      await refreshState(results[0].id);
+      showToast(isTrio ? "3 nouveaux sujets du jour prets" : "Nouvelle fiche generee");
     } catch (err) {
       container.innerHTML = `
         <div class="card" style="border-color:var(--danger);">
