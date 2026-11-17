@@ -1,4 +1,4 @@
-const CACHE_NAME = "daily-culture-v1.0.0";
+const CACHE_NAME = "daily-culture-v1.0.3";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -31,14 +31,8 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-
-  if (url.hostname.includes("generativelanguage.googleapis.com")) {
-    return;
-  }
-
-  if (event.request.method !== "GET") {
-    return;
-  }
+  if (url.hostname.includes("generativelanguage.googleapis.com")) return;
+  if (event.request.method !== "GET") return;
 
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
@@ -46,14 +40,11 @@ self.addEventListener("fetch", (event) => {
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseClone);
-            });
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
           }
           return networkResponse;
         })
         .catch(() => cachedResponse);
-
       return cachedResponse || fetchPromise;
     })
   );

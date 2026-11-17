@@ -1,20 +1,20 @@
 "use strict";
 
 const CATEGORIES = [
-  { id: "philo", name: "Philosophie & Epistemologie", icon: "ðŸ›", angle: "concepts fondateurs, logique, ethique, philosophie des sciences ou penseurs non occidentaux" },
-  { id: "beaux-arts", name: "Beaux-Arts & Histoire de l'Art", icon: "ðŸŽ¨", angle: "ruptures picturales, composition, technique, iconologie et mouvements artistiques" },
-  { id: "litterature", name: "Litterature Mondiale", icon: "ðŸ“–", angle: "oeuvres majeures, narration, courants litteraires mondiaux et figures oubliees" },
-  { id: "architecture", name: "Architecture & Urbanisme", icon: "ðŸ“", angle: "ingenierie spatiale, materiaux, typologies architecturales et urbanisme" },
-  { id: "musique", name: "Musique Savante & Jazz", icon: "ðŸŽ¼", angle: "contrepoint, harmonie, formes musicales, histoire du jazz et acoustique" },
-  { id: "cinema", name: "Cinema d'Auteur & Montage", icon: "ðŸŽž", angle: "grammaire cinematographique, montage, mise en scene et mouvements mondiaux" },
-  { id: "sciences", name: "Histoire des Sciences & Idees", icon: "ðŸ”­", angle: "paradigmes scientifiques, decouvertes fondamentales et controverses historiques" },
-  { id: "mythologie", name: "Mythologie & Anthropologie", icon: "ðŸ—¿", angle: "structures symboliques, mythes compares, rituels et anthropologie culturelle" },
-  { id: "geopolitique", name: "Histoire & Geopolitique", icon: "ðŸ§­", angle: "tournants historiques, civilisations, diplomatie et dynamiques spatiales" },
-  { id: "theatre", name: "Theatre & Dramaturgie", icon: "ðŸŽ­", angle: "tragedie, dramaturgie, mise en scene et evolution de l'espace scenique" },
-  { id: "photographie", name: "Photographie & Image", icon: "ðŸ“·", angle: "composition photographique, histoire du medium, reportage et esthetique visuelle" },
-  { id: "design", name: "Design & Arts Decoratifs", icon: "ðŸª‘", angle: "design industriel, ergonomie, Bauhaus, artisanat et culture materielle" },
-  { id: "numerique", name: "Arts Numeriques & Esthetique IA", icon: "ðŸ§¬", angle: "art generatif, cybernetique, nouveaux medias et esthetique computationnelle" },
-  { id: "poesie", name: "Poesie & Rhetorique", icon: "âœ’", angle: "prosodie, figures de style, poetique comparee et traditions orales" }
+  { id: "philo", name: "Philosophie & Epistemologie", icon: "\u{1F3DB}", angle: "concepts fondateurs, logique, ethique, philosophie des sciences ou penseurs non occidentaux" },
+  { id: "beaux-arts", name: "Beaux-Arts & Histoire de l'Art", icon: "\u{1F3A8}", angle: "ruptures picturales, composition, technique, iconologie et mouvements artistiques" },
+  { id: "litterature", name: "Litterature Mondiale", icon: "\u{1F4D6}", angle: "oeuvres majeures, narration, courants litteraires mondiaux et figures oubliees" },
+  { id: "architecture", name: "Architecture & Urbanisme", icon: "\u{1F4D0}", angle: "ingenierie spatiale, materiaux, typologies architecturales et urbanisme" },
+  { id: "musique", name: "Musique Savante & Jazz", icon: "\u{1F3BC}", angle: "contrepoint, harmonie, formes musicales, histoire du jazz et acoustique" },
+  { id: "cinema", name: "Cinema d'Auteur & Montage", icon: "\u{1F39E}", angle: "grammaire cinematographique, montage, mise en scene et mouvements mondiaux" },
+  { id: "sciences", name: "Histoire des Sciences & Idees", icon: "\u{1F52D}", angle: "paradigmes scientifiques, decouvertes fondamentales et controverses historiques" },
+  { id: "mythologie", name: "Mythologie & Anthropologie", icon: "\u{1F5FF}", angle: "structures symboliques, mythes compares, rituels et anthropologie culturelle" },
+  { id: "geopolitique", name: "Histoire & Geopolitique", icon: "\u{1F9ED}", angle: "tournants historiques, civilisations, diplomatie et dynamiques spatiales" },
+  { id: "theatre", name: "Theatre & Dramaturgie", icon: "\u{1F3AD}", angle: "tragedie, dramaturgie, mise en scene et evolution de l'espace scenique" },
+  { id: "photographie", name: "Photographie & Image", icon: "\u{1F4F7}", angle: "composition photographique, histoire du medium, reportage et esthetique visuelle" },
+  { id: "design", name: "Design & Arts Decoratifs", icon: "\u{1FA91}", angle: "design industriel, ergonomie, Bauhaus, artisanat et culture materielle" },
+  { id: "numerique", name: "Arts Numeriques & Esthetique IA", icon: "\u{1F9EC}", angle: "art generatif, cybernetique, nouveaux medias et esthetique computationnelle" },
+  { id: "poesie", name: "Poesie & Rhetorique", icon: "\u{2712}", angle: "prosodie, figures de style, poetique comparee et traditions orales" }
 ];
 
 const DB_NAME = "DailyCultureDB";
@@ -24,9 +24,29 @@ const STORE_ENTRIES = "entries";
 const SETTINGS_KEYS = {
   API_KEY: "dc_gemini_api_key",
   MODEL: "dc_gemini_model",
-  CUSTOM_MODEL: "dc_gemini_custom_model",
+  MODELS_CACHE: "dc_gemini_models_cache",
+  MODELS_CACHE_TS: "dc_gemini_models_cache_ts",
   DEPTH: "dc_editorial_depth"
 };
+
+const DEFAULT_FALLBACK_MODELS = [
+  { id: "gemini-flash-latest", label: "gemini-flash-latest (Defaut stable)" },
+  { id: "gemini-2.5-flash", label: "gemini-2.5-flash" },
+  { id: "gemini-2.5-pro", label: "gemini-2.5-pro" }
+];
+
+const EXCLUDED_MODEL_TOKENS = [
+  "embedding",
+  "imagen",
+  "veo",
+  "tts",
+  "audio",
+  "robotics",
+  "computer-use",
+  "aqa",
+  "bisect",
+  "deep-research"
+];
 
 let dbInstance = null;
 let allEntries = [];
@@ -92,15 +112,104 @@ async function deleteEntryById(id) {
 }
 
 function getSettings() {
-  const modelChoice = localStorage.getItem(SETTINGS_KEYS.MODEL) || "gemini-2.5-flash";
-  const customModel = localStorage.getItem(SETTINGS_KEYS.CUSTOM_MODEL) || "";
   return {
     apiKey: (localStorage.getItem(SETTINGS_KEYS.API_KEY) || "").trim(),
-    modelChoice,
-    customModel,
-    activeModel: modelChoice === "CUSTOM" && customModel.trim() ? customModel.trim() : modelChoice,
+    activeModel: (localStorage.getItem(SETTINGS_KEYS.MODEL) || "gemini-flash-latest").trim(),
     depth: localStorage.getItem(SETTINGS_KEYS.DEPTH) || "dense"
   };
+}
+
+function populateModelDropdown(modelsList, preferredModelId) {
+  const select = document.getElementById("modelSelect");
+  const list = Array.isArray(modelsList) && modelsList.length ? modelsList : DEFAULT_FALLBACK_MODELS;
+
+  select.innerHTML = "";
+  for (const m of list) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.label || m.id;
+    select.appendChild(opt);
+  }
+
+  const availableIds = new Set(list.map((m) => m.id));
+  if (preferredModelId && availableIds.has(preferredModelId)) {
+    select.value = preferredModelId;
+  } else if (availableIds.has("gemini-flash-latest")) {
+    select.value = "gemini-flash-latest";
+  } else if (availableIds.has("gemini-2.5-flash")) {
+    select.value = "gemini-2.5-flash";
+  } else {
+    select.value = list[0].id;
+  }
+
+  localStorage.setItem(SETTINGS_KEYS.MODEL, select.value);
+}
+
+async function syncGeminiModels(forceRefresh = false) {
+  const apiKey = (document.getElementById("apiKeyInput").value || localStorage.getItem(SETTINGS_KEYS.API_KEY) || "").trim();
+  const statusEl = document.getElementById("modelsStatusText");
+  const currentSelected = localStorage.getItem(SETTINGS_KEYS.MODEL) || "gemini-flash-latest";
+
+  if (!apiKey) {
+    populateModelDropdown(DEFAULT_FALLBACK_MODELS, currentSelected);
+    if (statusEl) statusEl.textContent = "Renseignez votre cle API pour charger la liste en direct.";
+    return DEFAULT_FALLBACK_MODELS;
+  }
+
+  const cachedRaw = localStorage.getItem(SETTINGS_KEYS.MODELS_CACHE);
+  const cachedTs = Number(localStorage.getItem(SETTINGS_KEYS.MODELS_CACHE_TS) || "0");
+  const cacheValid = cachedRaw && Date.now() - cachedTs < 6 * 3600 * 1000;
+
+  if (!forceRefresh && cacheValid) {
+    try {
+      const parsedCache = JSON.parse(cachedRaw);
+      populateModelDropdown(parsedCache, currentSelected);
+      if (statusEl) statusEl.textContent = `${parsedCache.length} modeles actifs (cache local).`;
+      return parsedCache;
+    } catch (_) {}
+  }
+
+  if (statusEl) statusEl.textContent = "Synchronisation GET /v1beta/models en cours...";
+
+  try {
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const payload = await resp.json();
+    const rawModels = Array.isArray(payload.models) ? payload.models : [];
+
+    const filtered = rawModels
+      .filter((m) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+      .map((m) => {
+        const cleanId = String(m.name || "").replace(/^models\//, "");
+        return { id: cleanId, displayName: m.displayName || cleanId };
+      })
+      .filter((m) => {
+        const lower = m.id.toLowerCase();
+        if (!lower.startsWith("gemini-")) return false;
+        return !EXCLUDED_MODEL_TOKENS.some((tok) => lower.includes(tok));
+      })
+      .sort((a, b) => {
+        if (a.id === "gemini-flash-latest") return -1;
+        if (b.id === "gemini-flash-latest") return 1;
+        return b.id.localeCompare(a.id);
+      })
+      .map((m) => ({
+        id: m.id,
+        label: m.displayName && m.displayName !== m.id ? `${m.id} (${m.displayName})` : m.id
+      }));
+
+    if (!filtered.length) throw new Error("Aucun modele generateContent retourne.");
+
+    localStorage.setItem(SETTINGS_KEYS.MODELS_CACHE, JSON.stringify(filtered));
+    localStorage.setItem(SETTINGS_KEYS.MODELS_CACHE_TS, String(Date.now()));
+    populateModelDropdown(filtered, currentSelected);
+    if (statusEl) statusEl.textContent = `${filtered.length} modeles synchronises avec succes.`;
+    return filtered;
+  } catch (err) {
+    populateModelDropdown(DEFAULT_FALLBACK_MODELS, currentSelected);
+    if (statusEl) statusEl.textContent = `Mode secours actif (${err.message}).`;
+    return DEFAULT_FALLBACK_MODELS;
+  }
 }
 
 function showToast(message) {
@@ -131,20 +240,14 @@ function computeStreak(entries) {
   const today = getTodayDateString();
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
-  if (uniqueDays[0] !== today && uniqueDays[0] !== yesterday) {
-    return 0;
-  }
+  if (uniqueDays[0] !== today && uniqueDays[0] !== yesterday) return 0;
 
   let streak = 1;
   for (let i = 0; i < uniqueDays.length - 1; i++) {
     const d1 = new Date(uniqueDays[i] + "T00:00:00Z");
     const d2 = new Date(uniqueDays[i + 1] + "T00:00:00Z");
-    const diffDays = Math.round((d1 - d2) / 86400000);
-    if (diffDays === 1) {
-      streak++;
-    } else {
-      break;
-    }
+    if (Math.round((d1 - d2) / 86400000) === 1) streak++;
+    else break;
   }
   return streak;
 }
@@ -153,16 +256,10 @@ function selectWeightedCategory(entries) {
   const counts = {};
   for (const cat of CATEGORIES) counts[cat.id] = 0;
   for (const item of entries) {
-    if (counts[item.categoryId] !== undefined) {
-      counts[item.categoryId]++;
-    }
+    if (counts[item.categoryId] !== undefined) counts[item.categoryId]++;
   }
 
-  const weights = CATEGORIES.map((cat) => {
-    const n = counts[cat.id] || 0;
-    return 1 / (1 + n * n);
-  });
-
+  const weights = CATEGORIES.map((cat) => 1 / (1 + Math.pow(counts[cat.id] || 0, 2)));
   const totalWeight = weights.reduce((acc, w) => acc + w, 0);
   let r = Math.random() * totalWeight;
   for (let i = 0; i < CATEGORIES.length; i++) {
@@ -170,6 +267,39 @@ function selectWeightedCategory(entries) {
     if (r <= 0) return CATEGORIES[i];
   }
   return CATEGORIES[0];
+}
+
+async function callGeminiGenerate(modelId, apiKey, prompt, responseSchema) {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    modelId
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.85,
+        responseMimeType: "application/json",
+        responseSchema
+      }
+    })
+  });
+
+  if (!response.ok) {
+    let errDetail = `Erreur HTTP ${response.status}`;
+    try {
+      const errJson = await response.json();
+      if (errJson?.error?.message) errDetail = errJson.error.message;
+    } catch (_) {}
+    throw new Error(errDetail);
+  }
+
+  const data = await response.json();
+  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) throw new Error("Reponse vide recue depuis l'API Gemini.");
+  return JSON.parse(rawText);
 }
 
 async function generateCulturalEntry(categoryObj) {
@@ -198,96 +328,61 @@ Langue : francais soutenu, precis et clair.`;
   const responseSchema = {
     type: "OBJECT",
     properties: {
-      title: { type: "STRING", description: "Titre precis et evocateur du sujet" },
-      hook: { type: "STRING", description: "Phrase d'accroche conceptuelle en une ligne" },
-      era: { type: "STRING", description: "Epoque, siecle ou courant exact" },
-      thesis: { type: "STRING", description: "These centrale et essence du concept ou de l'oeuvre" },
-      context: { type: "STRING", description: "Genese historique, intellectuelle ou technique" },
-      keyWorkAnalysis: { type: "STRING", description: "Analyse concrete d'une oeuvre, experience ou formulation pivot" },
-      contemporaryResonance: { type: "STRING", description: "Pourquoi ce sujet eclaire les enjeux actuels" },
-      quote: { type: "STRING", description: "Citation authentique et exacte liee au sujet" },
-      quoteAuthor: { type: "STRING", description: "Auteur et oeuvre source de la citation" },
-      furtherReading: { type: "STRING", description: "Reference primaire precise pour approfondir" },
+      title: { type: "STRING" },
+      hook: { type: "STRING" },
+      era: { type: "STRING" },
+      thesis: { type: "STRING" },
+      context: { type: "STRING" },
+      keyWorkAnalysis: { type: "STRING" },
+      contemporaryResonance: { type: "STRING" },
+      quote: { type: "STRING" },
+      quoteAuthor: { type: "STRING" },
+      furtherReading: { type: "STRING" },
       quiz: {
         type: "OBJECT",
         properties: {
-          question: { type: "STRING", description: "Question de comprehension conceptuelle" },
-          options: {
-            type: "ARRAY",
-            items: { type: "STRING" },
-            description: "Exactement 3 propositions distinctes"
-          },
-          correctIndex: { type: "INTEGER", description: "Index 0, 1 ou 2 de la bonne reponse" },
-          explanation: { type: "STRING", description: "Justification concise" }
+          question: { type: "STRING" },
+          options: { type: "ARRAY", items: { type: "STRING" } },
+          correctIndex: { type: "INTEGER" },
+          explanation: { type: "STRING" }
         },
         required: ["question", "options", "correctIndex", "explanation"]
       },
       flashcards: {
         type: "ARRAY",
-        description: "Exactement 3 flashcards atomiques optimisees pour Anki FSRS",
         items: {
           type: "OBJECT",
           properties: {
-            front: { type: "STRING", description: "Question atomique courte" },
-            back: { type: "STRING", description: "Reponse directe et concise" }
+            front: { type: "STRING" },
+            back: { type: "STRING" }
           },
           required: ["front", "back"]
         }
       }
     },
     required: [
-      "title",
-      "hook",
-      "era",
-      "thesis",
-      "context",
-      "keyWorkAnalysis",
-      "contemporaryResonance",
-      "quote",
-      "quoteAuthor",
-      "furtherReading",
-      "quiz",
-      "flashcards"
+      "title", "hook", "era", "thesis", "context", "keyWorkAnalysis",
+      "contemporaryResonance", "quote", "quoteAuthor", "furtherReading", "quiz", "flashcards"
     ]
   };
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    settings.activeModel
-  )}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
+  let parsed = null;
+  let usedModel = settings.activeModel;
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.85,
-        responseMimeType: "application/json",
-        responseSchema
-      }
-    })
-  });
-
-  if (!response.ok) {
-    let errDetail = `Erreur HTTP ${response.status}`;
-    try {
-      const errJson = await response.json();
-      if (errJson?.error?.message) {
-        errDetail = errJson.error.message;
-      }
-    } catch (_) {}
-    throw new Error(`API Gemini : ${errDetail}`);
+  try {
+    parsed = await callGeminiGenerate(usedModel, settings.apiKey, prompt, responseSchema);
+  } catch (primaryErr) {
+    if (usedModel !== "gemini-flash-latest") {
+      usedModel = "gemini-flash-latest";
+      parsed = await callGeminiGenerate(usedModel, settings.apiKey, prompt, responseSchema);
+      localStorage.setItem(SETTINGS_KEYS.MODEL, usedModel);
+      await syncGeminiModels(true);
+    } else {
+      throw new Error(`API Gemini : ${primaryErr.message}`);
+    }
   }
 
-  const data = await response.json();
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) {
-    throw new Error("Reponse vide recue depuis l'API Gemini.");
-  }
-
-  const parsed = JSON.parse(rawText);
   const now = Date.now();
-
   return {
     id: `dc_${now}_${Math.random().toString(36).slice(2, 7)}`,
     dateKey: getTodayDateString(),
@@ -295,7 +390,7 @@ Langue : francais soutenu, precis et clair.`;
     categoryId: categoryObj.id,
     categoryName: categoryObj.name,
     categoryIcon: categoryObj.icon,
-    modelUsed: settings.activeModel,
+    modelUsed: usedModel,
     favorite: false,
     quizAnsweredIndex: null,
     ...parsed
@@ -344,7 +439,7 @@ ${entry.keyWorkAnalysis}
 ## Resonance Contemporaine
 ${entry.contemporaryResonance}
 
-> "${entry.quote}" â€” **${entry.quoteAuthor}**
+> "${entry.quote}" - **${entry.quoteAuthor}**
 
 **Approfondissement :** ${entry.furtherReading}
 
@@ -407,19 +502,19 @@ function renderEntryCard(entry) {
     <article class="card">
       <div class="meta-row">
         <span class="badge">${escapeHtml(entry.categoryIcon)} ${escapeHtml(entry.categoryName)}</span>
-        <span class="era-tag">${escapeHtml(entry.era)} â€¢ ${escapeHtml(entry.dateKey)}</span>
+        <span class="era-tag">${escapeHtml(entry.era)} &#8226; ${escapeHtml(entry.dateKey)}</span>
       </div>
 
       <h1 class="article-title">${escapeHtml(entry.title)}</h1>
       <p class="article-hook">${escapeHtml(entry.hook)}</p>
 
       <div class="section-block">
-        <div class="section-label">These & Essence</div>
+        <div class="section-label">These &amp; Essence</div>
         <p class="section-text">${escapeHtml(entry.thesis)}</p>
       </div>
 
       <div class="section-block">
-        <div class="section-label">Contexte & Genese</div>
+        <div class="section-label">Contexte &amp; Genese</div>
         <p class="section-text">${escapeHtml(entry.context)}</p>
       </div>
 
@@ -435,7 +530,7 @@ function renderEntryCard(entry) {
 
       <blockquote class="quote-box">
         "${escapeHtml(entry.quote)}"
-        <footer>â€” ${escapeHtml(entry.quoteAuthor)}</footer>
+        <footer>&#8212; ${escapeHtml(entry.quoteAuthor)}</footer>
       </blockquote>
 
       <div class="section-block">
@@ -447,11 +542,7 @@ function renderEntryCard(entry) {
         <div class="section-label">Verification Conceptuelle</div>
         <p style="font-weight:600; font-size:0.94rem; margin-bottom:6px;">${escapeHtml(entry.quiz?.question)}</p>
         ${quizHtml}
-        ${
-          answered
-            ? `<div class="quiz-explanation">${escapeHtml(entry.quiz?.explanation)}</div>`
-            : ""
-        }
+        ${answered ? `<div class="quiz-explanation">${escapeHtml(entry.quiz?.explanation)}</div>` : ""}
       </div>
 
       <div class="section-block" style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
@@ -464,7 +555,7 @@ function renderEntryCard(entry) {
 
       <div class="action-toolbar">
         <button id="toggleFavBtn" class="btn-secondary btn-sm">
-          ${entry.favorite ? "â˜… Dans les favoris" : "â˜† Ajouter aux favoris"}
+          ${entry.favorite ? "&#9733; Dans les favoris" : "&#9734; Ajouter aux favoris"}
         </button>
         <button id="exportMdBtn" class="btn-secondary btn-sm">Export Obsidian (.md)</button>
         <button id="deleteEntryBtn" class="btn-secondary btn-sm" style="margin-left:auto; color:#ffa198;">Supprimer</button>
@@ -530,43 +621,39 @@ function renderLists() {
   });
 
   const archivesContainer = document.getElementById("archivesList");
-  if (!filtered.length) {
-    archivesContainer.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted);">Aucune fiche correspondante.</div>`;
-  } else {
-    archivesContainer.innerHTML = filtered
-      .map(
-        (item) => `
+  archivesContainer.innerHTML = !filtered.length
+    ? `<div class="card" style="text-align:center; color:var(--text-muted);">Aucune fiche correspondante.</div>`
+    : filtered
+        .map(
+          (item) => `
         <div class="list-item" data-open-id="${item.id}">
           <div class="meta-row" style="margin-bottom:4px;">
             <span class="badge">${escapeHtml(item.categoryIcon)} ${escapeHtml(item.categoryName)}</span>
-            <span class="era-tag">${escapeHtml(item.dateKey)} ${item.favorite ? "â˜…" : ""}</span>
+            <span class="era-tag">${escapeHtml(item.dateKey)} ${item.favorite ? "&#9733;" : ""}</span>
           </div>
           <div class="list-item-title">${escapeHtml(item.title)}</div>
           <div class="list-item-sub">${escapeHtml(item.hook)}</div>
         </div>`
-      )
-      .join("");
-  }
+        )
+        .join("");
 
   const favs = allEntries.filter((e) => e.favorite);
   const favContainer = document.getElementById("favoritesList");
-  if (!favs.length) {
-    favContainer.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted);">Aucun favori enregistre.</div>`;
-  } else {
-    favContainer.innerHTML = favs
-      .map(
-        (item) => `
+  favContainer.innerHTML = !favs.length
+    ? `<div class="card" style="text-align:center; color:var(--text-muted);">Aucun favori enregistre.</div>`
+    : favs
+        .map(
+          (item) => `
         <div class="list-item" data-open-id="${item.id}">
           <div class="meta-row" style="margin-bottom:4px;">
             <span class="badge">${escapeHtml(item.categoryIcon)} ${escapeHtml(item.categoryName)}</span>
-            <span class="era-tag">${escapeHtml(item.dateKey)} â˜…</span>
+            <span class="era-tag">${escapeHtml(item.dateKey)} &#9733;</span>
           </div>
           <div class="list-item-title">${escapeHtml(item.title)}</div>
           <div class="list-item-sub">${escapeHtml(item.hook)}</div>
         </div>`
-      )
-      .join("");
-  }
+        )
+        .join("");
 
   document.querySelectorAll("[data-open-id]").forEach((el) => {
     el.addEventListener("click", () => {
@@ -627,18 +714,14 @@ function populateCategorySelectors() {
   }
 }
 
-function loadSettingsIntoForm() {
-  const s = getSettings();
-  document.getElementById("apiKeyInput").value = s.apiKey;
-  document.getElementById("modelSelect").value = s.modelChoice;
-  document.getElementById("customModelInput").value = s.customModel;
-  document.getElementById("depthSelect").value = s.depth;
-  document.getElementById("customModelGroup").style.display = s.modelChoice === "CUSTOM" ? "block" : "none";
-}
-
 document.addEventListener("DOMContentLoaded", async () => {
   populateCategorySelectors();
-  loadSettingsIntoForm();
+
+  const s = getSettings();
+  document.getElementById("apiKeyInput").value = s.apiKey;
+  document.getElementById("depthSelect").value = s.depth;
+
+  await syncGeminiModels(false);
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
@@ -684,16 +767,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("searchInput").addEventListener("input", renderLists);
   document.getElementById("archiveCategoryFilter").addEventListener("change", renderLists);
 
-  document.getElementById("modelSelect").addEventListener("change", (e) => {
-    document.getElementById("customModelGroup").style.display = e.target.value === "CUSTOM" ? "block" : "none";
+  document.getElementById("refreshModelsBtn").addEventListener("click", async () => {
+    await syncGeminiModels(true);
+    showToast("Liste des modeles actualisee");
   });
 
-  document.getElementById("saveSettingsBtn").addEventListener("click", () => {
+  document.getElementById("saveSettingsBtn").addEventListener("click", async () => {
     localStorage.setItem(SETTINGS_KEYS.API_KEY, document.getElementById("apiKeyInput").value.trim());
     localStorage.setItem(SETTINGS_KEYS.MODEL, document.getElementById("modelSelect").value);
-    localStorage.setItem(SETTINGS_KEYS.CUSTOM_MODEL, document.getElementById("customModelInput").value.trim());
     localStorage.setItem(SETTINGS_KEYS.DEPTH, document.getElementById("depthSelect").value);
-    showToast("Parametres enregistres");
+    await syncGeminiModels(true);
+    showToast("Parametres et modeles enregistres");
   });
 
   document.getElementById("exportAllAnkiBtn").addEventListener("click", () => {
@@ -719,9 +803,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const list = Array.isArray(parsed) ? parsed : parsed.entries;
       if (!Array.isArray(list)) throw new Error("Format JSON invalide.");
       for (const item of list) {
-        if (item && item.id && item.title) {
-          await saveEntry(item);
-        }
+        if (item && item.id && item.title) await saveEntry(item);
       }
       await refreshState();
       showToast(`${list.length} fiche(s) importee(s)`);

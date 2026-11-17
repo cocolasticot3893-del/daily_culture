@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0a0c10" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Le Banquet des Muses â€” Daily Culture</title>
+  <title>Le Banquet des Muses - Daily Culture</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
@@ -20,7 +20,7 @@
     </div>
     <div class="stats-pill" title="Fiches archivees et serie en cours">
       <span id="totalCountBadge">0 fiches</span>
-      <span>â€¢</span>
+      <span>&#8226;</span>
       <span id="streakBadge">0j</span>
     </div>
   </header>
@@ -52,26 +52,25 @@
 
     <section id="view-settings" class="view">
       <div class="card">
-        <h2 style="font-size:1.1rem; margin-bottom:14px; color:var(--gold);">API Gemini & Generation</h2>
+        <h2 style="font-size:1.1rem; margin-bottom:14px; color:var(--gold);">API Gemini &amp; Modeles Dynamiques</h2>
 
         <div class="form-group">
           <label for="apiKeyInput">Cle API Google Gemini (AI Studio)</label>
           <input type="password" id="apiKeyInput" placeholder="AIzaSy..." autocomplete="off" />
-          <p class="help-text">Stockee uniquement en local dans votre navigateur (localStorage). Jamais transmise a un serveur tiers.</p>
+          <p class="help-text">Stockee uniquement en local (localStorage). Synchronise automatiquement les modeles via GET /v1beta/models.</p>
         </div>
 
         <div class="form-group">
-          <label for="modelSelect">Modele Gemini</label>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <label for="modelSelect" style="margin:0;">Modele Gemini</label>
+            <button type="button" id="refreshModelsBtn" class="btn-secondary btn-sm">Synchroniser les modeles</button>
+          </div>
           <select id="modelSelect">
-            <option value="gemini-2.5-flash">gemini-2.5-flash (Rapide, faible cout)</option>
-            <option value="gemini-2.5-pro">gemini-2.5-pro (Raisonnement approfondi)</option>
-            <option value="CUSTOM">Modele personnalise...</option>
+            <option value="gemini-flash-latest">gemini-flash-latest (Defaut stable)</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
           </select>
-        </div>
-
-        <div class="form-group" id="customModelGroup" style="display:none;">
-          <label for="customModelInput">Identifiant exact du modele</label>
-          <input type="text" id="customModelInput" placeholder="ex: gemini-2.5-flash" />
+          <p class="help-text" id="modelsStatusText">Synchronisation automatique au chargement avec votre cle API.</p>
         </div>
 
         <div class="form-group">
@@ -86,7 +85,7 @@
       </div>
 
       <div class="card">
-        <h2 style="font-size:1.1rem; margin-bottom:12px; color:var(--gold);">Sauvegarde & Export Anki (FSRS)</h2>
+        <h2 style="font-size:1.1rem; margin-bottom:12px; color:var(--gold);">Sauvegarde &amp; Export Anki (FSRS)</h2>
         <div style="display:flex; flex-direction:column; gap:10px;">
           <button id="exportAllAnkiBtn" class="btn-secondary">Exporter toutes les flashcards (Anki .tsv)</button>
           <button id="exportJsonBtn" class="btn-secondary">Exporter la base complete (JSON)</button>
@@ -103,19 +102,19 @@
 
   <nav class="bottom-nav" aria-label="Navigation principale">
     <button class="nav-btn active" data-target="today">
-      <span class="nav-icon">â—ˆ</span>
+      <span class="nav-icon">&#9672;</span>
       <span>Decouverte</span>
     </button>
     <button class="nav-btn" data-target="archives">
-      <span class="nav-icon">â˜°</span>
+      <span class="nav-icon">&#9776;</span>
       <span>Archives</span>
     </button>
     <button class="nav-btn" data-target="favorites">
-      <span class="nav-icon">â˜…</span>
+      <span class="nav-icon">&#9733;</span>
       <span>Favoris</span>
     </button>
     <button class="nav-btn" data-target="settings">
-      <span class="nav-icon">âš™</span>
+      <span class="nav-icon">&#9881;</span>
       <span>Config</span>
     </button>
   </nav>
