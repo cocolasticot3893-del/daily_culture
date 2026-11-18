@@ -1,4 +1,4 @@
-const CACHE_NAME = "daily-culture-v1.2.0";
+const CACHE_NAME = "daily-culture-v-20261118131810";
 const APP_SHELL = [
   "./",
   "./index.html",

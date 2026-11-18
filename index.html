@@ -123,5 +123,56 @@
   </nav>
 
   <script src="./app.js"></script>
+<style id="banquet-subjects-vertical-patch">
+  .banquet-vertical-stack {
+    display: flex !important;
+    flex-direction: column !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+    width: 100% !important;
+    overflow-x: visible !important;
+  }
+  .banquet-vertical-item {
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    flex: 1 1 auto !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+    box-sizing: border-box !important;
+  }
+  .banquet-vertical-item * {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+  }
+</style>
+<script id="banquet-subjects-vertical-script">
+(function () {
+  function enforceVerticalSubjects() {
+    const candidates = document.querySelectorAll('button, [role="tab"], div, article');
+    const subjectCards = [];
+    candidates.forEach(el => {
+      const txt = (el.textContent || '').trim();
+      if (/^SUJET\s*[123]\b/i.test(txt) && el.children.length <= 4 && txt.length < 220) {
+        subjectCards.push(el);
+      }
+    });
+    if (subjectCards.length >= 2) {
+      const parent = subjectCards[0].parentElement;
+      if (parent && parent.tagName !== 'BODY') {
+        parent.classList.add('banquet-vertical-stack');
+        Array.from(parent.children).forEach(child => {
+          child.classList.add('banquet-vertical-item');
+        });
+      }
+    }
+  }
+  document.addEventListener('DOMContentLoaded', enforceVerticalSubjects);
+  const observer = new MutationObserver(enforceVerticalSubjects);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
 </body>
 </html>
