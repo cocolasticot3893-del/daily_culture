@@ -290,25 +290,47 @@ async function queryWikipediaLeadImage(lang, searchQuery) {
   return null;
 }
 
-async function resolveSubjectIllustration(queryEn, queryFr, fallbackTitle) {
-  // 1. Recherche directe dans Wikimedia Commons (oeuvres, portraits, architectures, manuscrits)
-  let hit = await queryWikimediaCommons(queryEn);
-  if (hit) return hit;
+function verifyImageLoads(url, timeoutMs = 8000) {
+  // Verifie que l'URL repond (HTTP 200 + decodage) via un objet Image : pas de contrainte CORS
+  return new Promise((resolve) => {
+    if (!url) return resolve(false);
+    const img = new Image();
+    img.referrerPolicy = "no-referrer";
+    const timer = setTimeout(() => { img.src = ""; resolve(false); }, timeoutMs);
+    img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth > 0); };
+    img.onerror = () => { clearTimeout(timer); resolve(false); };
+    img.src = url;
+  });
+}
 
-  // 2. Recherche Wikipedia EN (couverture iconographique maximale)
-  hit = await queryWikipediaLeadImage("en", queryEn);
-  if (hit) return hit;
-
-  // 3. Recherche Wikipedia FR
-  hit = await queryWikipediaLeadImage("fr", queryFr || fallbackTitle);
-  if (hit) return hit;
-
-  // 4. Repli Wikimedia Commons sur le titre
-  if (fallbackTitle && fallbackTitle !== queryEn) {
-    hit = await queryWikimediaCommons(fallbackTitle);
-    if (hit) return hit;
+async function queryWikipediaSummary(lang, title) {
+  if (!title) return null;
+  try {
+    const resp = await fetch(
+      `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, "_"))}?redirect=true`
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const url = data?.thumbnail?.source || data?.originalimage?.source;
+    if (!isValidRasterImageUrl(url)) return null;
+    return { imageUrl: url, pageUrl: data?.content_urls?.desktop?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title)}` };
+  } catch (_) {
+    return null;
   }
+}
 
+async function resolveSubjectIllustration(item) {
+  const strategies = [
+    () => queryWikipediaSummary("en", item.wikipediaTitleEn),
+    () => queryWikipediaSummary("fr", item.wikipediaTitleFr),
+    () => queryWikipediaLeadImage("en", item.imageSearchQueryEn || item.wikipediaTitleEn),
+    () => queryWikimediaCommons(item.imageSearchQueryEn),
+    () => queryWikipediaLeadImage("fr", item.wikipediaTitleFr || item.title)
+  ];
+  for (const run of strategies) {
+    const hit = await run();
+    if (hit && (await verifyImageLoads(hit.imageUrl))) return hit;
+  }
   return null;
 }
 
@@ -394,167 +416,204 @@ function parseGeminiJsonSafe(rawText) {
   return JSON.parse(cleaned);
 }
 
-async function callGeminiGenerate(modelId, apiKey, prompt, responseSchema) {
-  const endpoint = `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){encodeURIComponent(
+function extractGeminiText(data) {
+  const cand = data?.candidates?.[0];
+  const parts = Array.isArray(cand?.content?.parts) ? cand.content.parts : [];
+  // Ignore les parts "thought" (modeles a raisonnement) et concatene le texte utile
+  const text = parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("");
+  if (!text) {
+    const reason = cand?.finishReason || data?.promptFeedback?.blockReason || "inconnue";
+    throw new Error(`Reponse vide de l'API Gemini (finishReason=${reason}).`);
+  }
+  if (cand?.finishReason === "MAX_TOKENS") {
+    throw new Error("JSON tronque par l'API Gemini (finishReason=MAX_TOKENS).");
+  }
+  return text;
+}
+
+async function callGeminiGenerate(modelId, apiKey, prompt, responseSchema, maxTokens) {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     modelId
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.85,
-        maxOutputTokens: 8192,
-        responseMimeType: "application/json",
-        responseSchema
-      }
-    })
-  });
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.85,
+          maxOutputTokens: maxTokens,
+          responseMimeType: "application/json",
+          responseSchema
+        }
+      })
+    });
+  } catch (netErr) {
+    const err = new Error(`[${modelId}] Erreur reseau : ${netErr.message}`);
+    err.status = 0;
+    throw err;
+  }
 
   if (!response.ok) {
-    let errDetail = `Erreur HTTP ${response.status}`;
+    let errDetail = "";
     try {
       const errJson = await response.json();
-      if (errJson?.error?.message) errDetail = errJson.error.message;
+      errDetail = errJson?.error?.message || JSON.stringify(errJson).slice(0, 300);
     } catch (_) {}
-    const err = new Error(errDetail);
+    const err = new Error(`[${modelId}] HTTP ${response.status}${errDetail ? " : " + errDetail : ""}`);
     err.status = response.status;
     throw err;
   }
 
   const data = await response.json();
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) throw new Error("Reponse vide recue depuis l'API Gemini.");
-  return parseGeminiJsonSafe(rawText);
+  const rawText = extractGeminiText(data);
+  try {
+    return parseGeminiJsonSafe(rawText);
+  } catch (parseErr) {
+    throw new Error(`[${modelId}] JSON invalide : ${parseErr.message}`);
+  }
 }
 
-async function generateCulturalEntry(categoryObj, extraExcludedTitles = []) {
+const ENTRY_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    categoryId: { type: "STRING" },
+    title: { type: "STRING" },
+    hook: { type: "STRING" },
+    era: { type: "STRING" },
+    wikipediaTitleEn: { type: "STRING", description: "Titre exact de l'article Wikipedia anglophone de l'oeuvre/monument/personnage central" },
+    wikipediaTitleFr: { type: "STRING", description: "Titre exact de l'article Wikipedia francophone correspondant" },
+    imageSearchQueryEn: { type: "STRING", description: "2 a 4 mots-cles en ANGLAIS designant l'oeuvre ou la figure concrete" },
+    imageCaption: { type: "STRING" },
+    thesis: { type: "STRING" },
+    context: { type: "STRING" },
+    keyWorkAnalysis: { type: "STRING" },
+    contemporaryResonance: { type: "STRING" },
+    quote: { type: "STRING" },
+    quoteAuthor: { type: "STRING" },
+    furtherReading: { type: "STRING" },
+    quiz: {
+      type: "OBJECT",
+      properties: {
+        question: { type: "STRING" },
+        options: { type: "ARRAY", items: { type: "STRING" } },
+        correctIndex: { type: "INTEGER" },
+        explanation: { type: "STRING" }
+      },
+      required: ["question", "options", "correctIndex", "explanation"]
+    },
+    flashcards: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: { front: { type: "STRING" }, back: { type: "STRING" } },
+        required: ["front", "back"]
+      }
+    }
+  },
+  required: [
+    "categoryId", "title", "hook", "era", "wikipediaTitleEn", "wikipediaTitleFr", "imageSearchQueryEn",
+    "imageCaption", "thesis", "context", "keyWorkAnalysis", "contemporaryResonance",
+    "quote", "quoteAuthor", "furtherReading", "quiz", "flashcards"
+  ]
+};
+
+/**
+ * Un seul appel Gemini structure pour N categories (1 a 3) : latence /3, pas de 429 en rafale.
+ */
+async function generateCulturalEntries(categoryObjs) {
   const settings = getSettings();
   if (!settings.apiKey) {
     throw new Error("Cle API Gemini manquante. Renseignez-la dans l'onglet Config.");
   }
 
-  const recentTitles = [...allEntries.slice(0, 35).map((e) => e.title), ...extraExcludedTitles];
+  const recentTitles = allEntries.slice(0, 40).map((e) => e.title);
   const exclusionClause = recentTitles.length
     ? `Sujets deja traites a exclure strictement : ${recentTitles.join(" | ")}.`
     : "Aucun sujet precedent.";
 
-  const depthInstruction =
-    settings.depth === "deep"
-      ? "Format lecture 6 minutes : redige une analyse approfondie, nuancee et academique (environ 140 a 190 mots par section principale), en explicitant les termes techniques rares entre parentheses."
-      : "Format lecture 3 minutes : redige une synthese dense, incisive et sans remplissage (environ 70 a 100 mots par section principale), en explicitant les termes techniques rares entre parentheses.";
+  const deep = settings.depth === "deep";
+  const depthInstruction = deep
+    ? "Format lecture 6 minutes : analyse approfondie, nuancee et academique (environ 140 a 190 mots par section principale)."
+    : "Format lecture 3 minutes : synthese dense, incisive, sans remplissage (environ 70 a 100 mots par section principale).";
+
+  const catLines = categoryObjs
+    .map((c, i) => `${i + 1}. categoryId="${c.id}" - domaine "${c.name}" (angle : ${c.angle})`)
+    .join("\n");
 
   const prompt = `Tu es un erudit, historien des idees et critique d'art de niveau universitaire.
-Genere une fiche de culture generale pointue dans le domaine : "${categoryObj.name}" (angle : ${categoryObj.angle}).
-Evite les lieux communs scolaires : privilegie une oeuvre pivot, un concept precis, un tournant meconnu ou un penseur exigeant.
-${depthInstruction}
+Genere exactement ${categoryObjs.length} fiche(s) de culture generale pointue, une par domaine ci-dessous, dans cet ordre, en recopiant le categoryId :
+${catLines}
+Evite les lieux communs scolaires : privilegie une oeuvre pivot, un concept precis, un tournant meconnu ou un penseur exigeant. Les sujets doivent etre distincts.
+${depthInstruction} Explicite les termes techniques rares entre parentheses.
+Chaque fiche : 1 quiz a 4 options, 3 a 5 flashcards. wikipediaTitleEn/Fr doivent etre des titres d'articles Wikipedia existants illustres (oeuvre, monument, portrait).
 ${exclusionClause}
 Langue : francais soutenu, precis et clair.`;
 
   const responseSchema = {
     type: "OBJECT",
-    properties: {
-      title: { type: "STRING" },
-      hook: { type: "STRING" },
-      era: { type: "STRING" },
-      imageSearchQueryEn: {
-        type: "STRING",
-        description: "2 a 4 mots-cles en ANGLAIS designant l'oeuvre, le tableau, le monument ou le personnage historique concret (ex: Rembrandt Night Watch, Bauhaus Dessau, Spinoza portrait)"
-      },
-      imageSearchQueryFr: {
-        type: "STRING",
-        description: "Titre exact de l'article Wikipedia francophone correspondant"
-      },
-      imageCaption: {
-        type: "STRING",
-        description: "Legende documentaire de l'oeuvre, du monument ou de la figure associee"
-      },
-      thesis: { type: "STRING" },
-      context: { type: "STRING" },
-      keyWorkAnalysis: { type: "STRING" },
-      contemporaryResonance: { type: "STRING" },
-      quote: { type: "STRING" },
-      quoteAuthor: { type: "STRING" },
-      furtherReading: { type: "STRING" },
-      quiz: {
-        type: "OBJECT",
-        properties: {
-          question: { type: "STRING" },
-          options: { type: "ARRAY", items: { type: "STRING" } },
-          correctIndex: { type: "INTEGER" },
-          explanation: { type: "STRING" }
-        },
-        required: ["question", "options", "correctIndex", "explanation"]
-      },
-      flashcards: {
-        type: "ARRAY",
-        items: {
-          type: "OBJECT",
-          properties: {
-            front: { type: "STRING" },
-            back: { type: "STRING" }
-          },
-          required: ["front", "back"]
-        }
-      }
-    },
-    required: [
-      "title", "hook", "era", "imageSearchQueryEn", "imageSearchQueryFr", "imageCaption",
-      "thesis", "context", "keyWorkAnalysis", "contemporaryResonance",
-      "quote", "quoteAuthor", "furtherReading", "quiz", "flashcards"
-    ]
+    properties: { entries: { type: "ARRAY", items: ENTRY_SCHEMA } },
+    required: ["entries"]
   };
+  const maxTokens = Math.min(65536, (deep ? 9000 : 5000) * categoryObjs.length + 8000);
 
-  let parsed = null;
-  let usedModel = settings.activeModel;
-  const candidateModels = [usedModel, "gemini-flash-latest", "gemini-2.5-flash"].filter(
+  const candidateModels = [settings.activeModel, "gemini-flash-latest", "gemini-2.5-flash"].filter(
     (v, idx, arr) => v && arr.indexOf(v) === idx
   );
 
-  let lastError = null;
-  for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
-    const candidate = candidateModels[mIdx];
-    try {
-      parsed = await callGeminiGenerate(candidate, settings.apiKey, prompt, responseSchema);
-      usedModel = candidate;
-      break;
-    } catch (err) {
-      lastError = err;
-      // Si rate-limit (429) ou surcharge (503), attendre 2.5s avant retry / fallback
-      if (err.status === 429 || err.status === 503) {
-        await sleep(2500);
+  let parsed = null;
+  let usedModel = null;
+  const errors = [];
+  for (const candidate of candidateModels) {
+    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+      try {
+        const out = await callGeminiGenerate(candidate, settings.apiKey, prompt, responseSchema, maxTokens);
+        if (!Array.isArray(out?.entries) || !out.entries.length) throw new Error(`[${candidate}] tableau entries vide`);
+        parsed = out.entries;
+        usedModel = candidate;
+      } catch (err) {
+        errors.push(err.message);
+        if (err.status === 400 || err.status === 401 || err.status === 403) break; // inutile de retenter ce modele
+        if (err.status === 429 || err.status === 503 || err.status === 500) {
+          await sleep(2000 * Math.pow(2, attempt) + Math.random() * 800);
+        } else {
+          break;
+        }
       }
     }
+    if (parsed) break;
   }
 
   if (!parsed) {
-    throw new Error(`API Gemini : ${lastError ? lastError.message : "Echec de generation"}`);
+    throw new Error(`API Gemini : ${errors.join(" || ") || "Echec de generation"}`);
   }
 
-  const media = await resolveSubjectIllustration(
-    parsed.imageSearchQueryEn,
-    parsed.imageSearchQueryFr,
-    parsed.title
-  );
   const now = Date.now();
-
-  return {
-    id: `dc_${now}_${Math.random().toString(36).slice(2, 7)}`,
-    dateKey: getTodayDateString(),
-    createdAt: now,
-    readingDuration: settings.depth === "deep" ? "6 min" : "3 min",
-    categoryId: categoryObj.id,
-    categoryName: categoryObj.name,
-    categoryIcon: categoryObj.icon,
-    modelUsed: usedModel,
-    imageUrl: media?.imageUrl || null,
-    imageSourceUrl: media?.pageUrl || null,
-    favorite: false,
-    quizAnsweredIndex: null,
-    ...parsed
-  };
+  const results = await Promise.all(
+    parsed.slice(0, categoryObjs.length).map(async (item, idx) => {
+      const cat = categoryObjs.find((c) => c.id === item.categoryId) || categoryObjs[idx] || categoryObjs[0];
+      const media = await resolveSubjectIllustration(item);
+      return {
+        ...item,
+        id: `dc_${now}_${idx}_${Math.random().toString(36).slice(2, 7)}`,
+        dateKey: getTodayDateString(),
+        createdAt: now - idx,
+        readingDuration: deep ? "6 min" : "3 min",
+        categoryId: cat.id,
+        categoryName: cat.name,
+        categoryIcon: cat.icon,
+        modelUsed: usedModel,
+        imageUrl: media?.imageUrl || null,
+        imageSourceUrl: media?.pageUrl || null,
+        favorite: false,
+        quizAnsweredIndex: null
+      };
+    })
+  );
+  return results;
 }
 
 /* ---------------- EXPORTS ANKI & OBSIDIAN ---------------- */
@@ -991,45 +1050,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const generatedThisRun = [];
-    const excludedTitlesThisRun = [];
 
     try {
-      for (let i = 0; i < targetCategories.length; i++) {
-        const cat = targetCategories[i];
-        btn.textContent = isTrio ? `${i + 1}/${targetCategories.length}...` : "En cours...";
+      btn.textContent = "En cours...";
+      container.innerHTML = `
+        <div class="card loader">
+          <div class="spinner"></div>
+          <div style="font-weight:600; color:var(--text-main);">
+            ${targetCategories.map((c) => escapeHtml(c.icon) + " " + escapeHtml(c.name)).join(" &middot; ")}
+          </div>
+          <div style="font-size:0.82rem; margin-top:6px; color:var(--gold);">
+            Synthese Gemini (1 requete) + illustrations Wikipedia/Wikimedia verifiees...
+          </div>
+        </div>`;
 
-        if (generatedThisRun.length === 0) {
-          container.innerHTML = `
-            <div class="card loader">
-              <div class="spinner"></div>
-              <div style="font-weight:600; color:var(--text-main);">
-                Sujet ${i + 1} / ${targetCategories.length} : ${escapeHtml(cat.icon)} ${escapeHtml(cat.name)}
-              </div>
-              <div style="font-size:0.82rem; margin-top:6px; color:var(--gold);">
-                Synthese Gemini + recherche d'illustration Wikimedia...
-              </div>
-            </div>`;
-        } else {
-          showToast(`Generation sujet ${i + 1}/${targetCategories.length} (${cat.name})...`);
-        }
-
-        const entry = await generateCulturalEntry(cat, excludedTitlesThisRun);
+      const entries = await generateCulturalEntries(targetCategories);
+      for (const entry of entries) {
         await saveEntry(entry);
         generatedThisRun.push(entry);
-        excludedTitlesThisRun.push(entry.title);
-
-        if (isTrio) {
-          activeBatchIds.push(entry.id);
-          localStorage.setItem(SETTINGS_KEYS.BATCH_IDS, JSON.stringify(activeBatchIds));
-        }
-
-        // Afficher immediatement des le 1er sujet pret, puis actualiser les onglets au fur et a mesure
-        await refreshState(generatedThisRun[0].id);
-
-        if (i < targetCategories.length - 1) {
-          await sleep(1200);
-        }
+        if (isTrio) activeBatchIds.push(entry.id);
       }
+      if (isTrio) localStorage.setItem(SETTINGS_KEYS.BATCH_IDS, JSON.stringify(activeBatchIds));
+      await refreshState(generatedThisRun[0].id);
 
       showToast(isTrio ? "Menu du jour (3 sujets) pret" : "Nouvelle fiche generee");
     } catch (err) {
@@ -1051,6 +1093,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("searchInput").addEventListener("input", renderLists);
   document.getElementById("archiveCategoryFilter").addEventListener("change", renderLists);
+
+  document.getElementById("purgeCacheBtn").addEventListener("click", async () => {
+    try {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+      localStorage.removeItem(SETTINGS_KEYS.MODELS_CACHE);
+      localStorage.removeItem(SETTINGS_KEYS.MODELS_CACHE_TS);
+      showToast("Cache PWA purge - rechargement...");
+      setTimeout(() => location.reload(), 800);
+    } catch (err) {
+      showToast(`Echec purge cache : ${err.message}`);
+    }
+  });
 
   document.getElementById("refreshModelsBtn").addEventListener("click", async () => {
     await syncGeminiModels(true);

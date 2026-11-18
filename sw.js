@@ -1,4 +1,4 @@
-const CACHE_NAME = "daily-culture-v1.1.1";
+const CACHE_NAME = "daily-culture-v1.2.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -41,17 +41,15 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
-          }
-          return networkResponse;
-        })
-        .catch(() => cachedResponse);
-      return cachedResponse || fetchPromise;
-    })
+    // Network-first : evite de servir un app.js obsolete ; cache en repli hors-ligne
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200 && url.origin === self.location.origin) {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
+        }
+        return networkResponse;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
